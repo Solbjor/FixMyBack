@@ -1,7 +1,14 @@
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
-import { useState } from 'react';
-import { Pressable, SafeAreaView, StyleSheet, View } from 'react-native';
+import * as Haptics from 'expo-haptics';
+import { useEffect, useRef, useState } from 'react';
+import {
+  Animated,
+  Pressable,
+  StyleSheet,
+  View,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import CameraScreen from './src/screens/CameraScreen';
 import HomeScreen from './src/screens/HomeScreen';
@@ -12,50 +19,127 @@ type TabKey = 'home' | 'camera' | 'profile';
 const tabs: Array<{
   key: TabKey;
   icon: keyof typeof Ionicons.glyphMap;
+  activeIcon: keyof typeof Ionicons.glyphMap;
 }> = [
-  { key: 'home', icon: 'home-outline' },
-  { key: 'camera', icon: 'camera-outline' },
-  { key: 'profile', icon: 'person-outline' },
+  { key: 'home',    icon: 'home-outline',   activeIcon: 'home'   },
+  { key: 'camera',  icon: 'camera-outline', activeIcon: 'camera' },
+  { key: 'profile', icon: 'person-outline', activeIcon: 'person' },
 ];
+
+// ─── Animated tab button ──────────────────────────────────────────────────────
+
+function TabButton({
+  tab,
+  active,
+  onPress,
+}: {
+  tab: (typeof tabs)[number];
+  active: boolean;
+  onPress: () => void;
+}) {
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+  const liftAnim  = useRef(new Animated.Value(active ? -3 : 0)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.spring(liftAnim, {
+        toValue: active ? -3 : 0,
+        useNativeDriver: true,
+        tension: 120,
+        friction: 9,
+      }),
+      Animated.spring(scaleAnim, {
+        toValue: active ? 1.06 : 1,
+        useNativeDriver: true,
+        tension: 140,
+        friction: 8,
+      }),
+    ]).start();
+  }, [active, liftAnim, scaleAnim]);
+
+  const handlePressIn = () => {
+    Animated.spring(scaleAnim, {
+      toValue: active ? 0.96 : 0.9,
+      useNativeDriver: true,
+      tension: 200,
+      friction: 10,
+    }).start();
+  };
+
+  const handlePressOut = () => {
+    Animated.spring(scaleAnim, {
+      toValue: active ? 1.06 : 1,
+      useNativeDriver: true,
+      tension: 120,
+      friction: 6,
+    }).start();
+  };
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${tab.key} tab`}
+      accessibilityState={{ selected: active }}
+      onPress={onPress}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+    >
+      <Animated.View
+        style={[
+          styles.tabButton,
+          active && styles.tabButtonActive,
+          { transform: [{ translateY: liftAnim }, { scale: scaleAnim }] },
+        ]}
+      >
+        <Ionicons
+          name={active ? tab.activeIcon : tab.icon}
+          size={22}
+          color={active ? '#ffffff' : '#111111'}
+        />
+      </Animated.View>
+    </Pressable>
+  );
+}
+
+// ─── App ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabKey>('camera');
 
+  const handleTabPress = (tabKey: TabKey) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {
+      // Ignore haptics failures on unsupported devices/platforms.
+    });
+    setActiveTab(tabKey);
+  };
+
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView edges={['top', 'left', 'right']} style={styles.safeArea}>
       <StatusBar style="dark" />
+
       <View style={styles.screen}>
-        {activeTab === 'home' && <HomeScreen />}
-        {activeTab === 'camera' && <CameraScreen />}
+        {activeTab === 'home'    && <HomeScreen />}
+        {activeTab === 'camera'  && <CameraScreen />}
         {activeTab === 'profile' && <ProfileScreen />}
       </View>
 
       <View style={styles.tabShell}>
         <View style={styles.tabBar}>
-          {tabs.map((tab) => {
-            const active = activeTab === tab.key;
-
-            return (
-              <Pressable
-                key={tab.key}
-                accessibilityRole="button"
-                accessibilityLabel={`${tab.key} tab`}
-                onPress={() => setActiveTab(tab.key)}
-                style={[styles.tabButton, active && styles.activeTabButton]}
-              >
-                <Ionicons
-                  color={active ? '#ffffff' : '#111111'}
-                  name={tab.icon}
-                  size={24}
-                />
-              </Pressable>
-            );
-          })}
+          {tabs.map((tab) => (
+            <TabButton
+              key={tab.key}
+              tab={tab}
+              active={activeTab === tab.key}
+              onPress={() => handleTabPress(tab.key)}
+            />
+          ))}
         </View>
       </View>
     </SafeAreaView>
   );
 }
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   safeArea: {
@@ -67,7 +151,7 @@ const styles = StyleSheet.create({
   },
   tabShell: {
     paddingHorizontal: 16,
-    paddingBottom: 18,
+    paddingBottom: 30,
   },
   tabBar: {
     alignItems: 'center',
@@ -77,11 +161,10 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     borderWidth: 1,
     flexDirection: 'row',
-    gap: 16,
+    gap: 6,
     justifyContent: 'space-between',
-    minWidth: 168,
-    paddingHorizontal: 18,
-    paddingVertical: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
     shadowColor: '#000000',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.08,
@@ -94,7 +177,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: 40,
   },
-  activeTabButton: {
-    backgroundColor: '#000000',
+  tabButtonActive: {
+    backgroundColor: '#111111',
   },
 });
