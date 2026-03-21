@@ -19,11 +19,7 @@ async function request(method: string, path: string, body?: object){
         ...(body && { body: JSON.stringify(body) }),
     });
 
-    const text = await res.text();
-    console.log('response status:', res.status);
-    console.log('response body:', text);
-
-    const data = JSON.parse(text);
+    const data = await res.json();
     if (!res.ok) throw new Error(data.error ?? 'Request failed');
     return data;
 }
