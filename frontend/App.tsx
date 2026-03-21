@@ -10,11 +10,21 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { SERVER_URL } from './src/config';
+import LoginScreen from './src/screens/LoginScreen';
 import CameraScreen from './src/screens/CameraScreen';
 import HomeScreen from './src/screens/HomeScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
+import WelcomeScreen from './src/screens/WelcomeScreen';
 
 type TabKey = 'home' | 'camera' | 'profile';
+type AppStage = 'login' | 'welcome' | 'app';
+
+interface Session {
+  email: string;
+  uid: string;
+  idToken: string;
+}
 
 const tabs: Array<{
   key: TabKey;
@@ -105,6 +115,8 @@ function TabButton({
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabKey>('camera');
+  const [stage, setStage] = useState<AppStage>('login');
+  const [session, setSession] = useState<Session | null>(null);
 
   const handleTabPress = (tabKey: TabKey) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {
@@ -113,28 +125,107 @@ export default function App() {
     setActiveTab(tabKey);
   };
 
+  const handleLogin = async (email: string, password: string) => {
+    const response = await fetch(`${SERVER_URL}/auth/login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ email, password }),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error ?? 'Unable to sign in');
+    }
+
+    setSession({
+      email,
+      uid: data.uid,
+      idToken: data.idToken,
+    });
+    setStage('welcome');
+  };
+
+  const handleSignup = async (
+    email: string,
+    password: string,
+    displayName: string,
+  ) => {
+    const response = await fetch(`${SERVER_URL}/auth/signup`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ email, password, displayName }),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error ?? 'Unable to create account');
+    }
+
+    setSession({
+      email: data.email ?? email,
+      uid: data.uid,
+      idToken: '',
+    });
+    setStage('welcome');
+  };
+
+  const handleContinue = () => {
+    Haptics.selectionAsync().catch(() => {
+      // Ignore haptics failures on unsupported devices/platforms.
+    });
+    setStage('app');
+  };
+
+  const handleLogout = () => {
+    setSession(null);
+    setStage('login');
+    setActiveTab('camera');
+  };
+
   return (
     <SafeAreaView edges={['top', 'left', 'right']} style={styles.safeArea}>
       <StatusBar style="dark" />
 
       <View style={styles.screen}>
-        {activeTab === 'home'    && <HomeScreen />}
-        {activeTab === 'camera'  && <CameraScreen />}
-        {activeTab === 'profile' && <ProfileScreen />}
+        {stage === 'login' && (
+          <LoginScreen onLogin={handleLogin} onSignup={handleSignup} />
+        )}
+        {stage === 'welcome' && session && (
+          <WelcomeScreen
+            email={session.email}
+            onContinue={handleContinue}
+            onLogout={handleLogout}
+          />
+        )}
+        {stage === 'app' && (
+          <>
+            {activeTab === 'home' && <HomeScreen />}
+            {activeTab === 'camera' && <CameraScreen />}
+            {activeTab === 'profile' && (
+              <ProfileScreen email={session?.email} onLogout={handleLogout} />
+            )}
+          </>
+        )}
       </View>
 
-      <View style={styles.tabShell}>
-        <View style={styles.tabBar}>
-          {tabs.map((tab) => (
-            <TabButton
-              key={tab.key}
-              tab={tab}
-              active={activeTab === tab.key}
-              onPress={() => handleTabPress(tab.key)}
-            />
-          ))}
+      {stage === 'app' && (
+        <View style={styles.tabShell}>
+          <View style={styles.tabBar}>
+            {tabs.map((tab) => (
+              <TabButton
+                key={tab.key}
+                tab={tab}
+                active={activeTab === tab.key}
+                onPress={() => handleTabPress(tab.key)}
+              />
+            ))}
+          </View>
         </View>
-      </View>
+      )}
     </SafeAreaView>
   );
 }
