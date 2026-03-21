@@ -1,6 +1,14 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-export default function ProfileScreen() {
+interface ProfileScreenProps {
+  email?: string;
+  onLogout?: () => void;
+}
+
+export default function ProfileScreen({
+  email,
+  onLogout,
+}: ProfileScreenProps) {
   return (
     <View style={styles.container}>
       <Text style={styles.eyebrow}>Profile</Text>
@@ -9,6 +17,12 @@ export default function ProfileScreen() {
         This tab can hold profile details, history, notifications, and app
         settings.
       </Text>
+      {email ? <Text style={styles.meta}>Signed in as {email}</Text> : null}
+      {onLogout ? (
+        <Pressable onPress={onLogout} style={styles.button}>
+          <Text style={styles.buttonText}>Log out</Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
@@ -35,5 +49,25 @@ const styles = StyleSheet.create({
     color: '#3f3a31',
     fontSize: 17,
     lineHeight: 26,
+    marginBottom: 18,
+  },
+  meta: {
+    color: '#7a7466',
+    fontSize: 14,
+    marginBottom: 18,
+  },
+  button: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: '#111111',
+    borderRadius: 999,
+    justifyContent: 'center',
+    minHeight: 44,
+    paddingHorizontal: 18,
+  },
+  buttonText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '600',
   },
 });
