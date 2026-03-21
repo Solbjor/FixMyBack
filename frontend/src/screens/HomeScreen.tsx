@@ -162,7 +162,7 @@ export default function HomeScreen() {
           showsVerticalScrollIndicator={false}
         >
           <Text style={styles.eyebrow}>Home</Text>
-          <Text style={styles.title}>Track your{'\n'}recovery</Text>
+          <Text style={styles.title}>Track your{'\n'}posture!!</Text>
 
           {/* ── Main card ── */}
           <View style={styles.card}>
