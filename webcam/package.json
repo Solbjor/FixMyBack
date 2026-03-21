@@ -20,6 +20,7 @@
   "homepage": "https://github.com/OzcarC/sandbox-html#readme",
   "dependencies": {
     "express": "^5.2.1",
-    "socket.io": "^4.8.3"
+    "socket.io": "^4.8.3",
+    "socket.io-client": "^4.8.3"
   }
 }

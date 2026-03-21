@@ -7,12 +7,50 @@
     body { margin: 0; background: #111; color: white; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; }
     .feed { position: relative; width: 640px; height: 480px; }
     video { width: 100%; height: 100%; }
+    canvas { display: none; }
+    .status { 
+      margin-top: 20px; 
+      padding: 15px 20px; 
+      background: #1a1a1a; 
+      border-radius: 8px; 
+      border: 2px solid #333; 
+      min-width: 300px;
+      text-align: center;
+    }
+    .status.connected { border-color: #22c55e; }
+    .status.connected .indicator { background: #22c55e; }
+    .indicator { 
+      display: inline-block; 
+      width: 10px; 
+      height: 10px; 
+      border-radius: 50%; 
+      background: #999; 
+      margin-right: 8px; 
+      animation: pulse 1s infinite;
+    }
+    @keyframes pulse {
+      0% { opacity: 1; }
+      50% { opacity: 0.5; }
+      100% { opacity: 1; }
+    }
+    .frame-count { 
+      display: block; 
+      margin-top: 10px; 
+      font-size: 14px; 
+      color: #aaa;
+    }
   </style>
 </head>
 <body>
+  <h2>FixMyBack - PC Camera Feed</h2>
   <div class="feed">
     <video id="video" autoplay playsinline></video>
     <canvas id="canvas" width="640" height="480" style="display:none;"></canvas>
+  </div>
+  
+  <div class="status" id="status">
+    <div><span class="indicator"></span><span id="status-text">Initializing...</span></div>
+    <span class="frame-count">Frames sent: <strong id="frame-count">0</strong></span>
   </div>
 
   <script src="/socket.io/socket.io.js"></script>
@@ -21,16 +59,45 @@
     const video = document.getElementById('video');
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
+    const statusEl = document.getElementById('status');
+    const statusText = document.getElementById('status-text');
+    const frameCountEl = document.getElementById('frame-count');
+    
+    let frameCount = 0;
+
+    socket.on('connect', () => {
+      statusEl.classList.add('connected');
+      statusText.textContent = '✓ Connected to relay';
+      console.log('[PC] Connected to relay');
+    });
+
+    socket.on('disconnect', () => {
+      statusEl.classList.remove('connected');
+      statusText.textContent = '✗ Disconnected from relay';
+      console.log('[PC] Disconnected from relay');
+    });
 
     navigator.mediaDevices.getUserMedia({ video: true })
-      .then(stream => video.srcObject = stream)
-      .catch(err => console.error('Camera error:', err));
-
+      .then(stream => {
+        video.srcObject = stream;
+        console.log('[PC] Camera access granted');
+      })
+      .catch(err => {
+        console.error('Camera error:', err);
+        statusText.textContent = '✗ Camera access denied';
+      });
 
     setInterval(() => {
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       const frameData = canvas.toDataURL('image/jpeg', 0.4);
       socket.emit('frame', frameData);
+      
+      frameCount++;
+      frameCountEl.textContent = frameCount;
+      
+      if (frameCount % 30 === 0) {
+        console.log(`[PC] Sent ${frameCount} frames`);
+      }
     }, 100);
   </script>
 </body>

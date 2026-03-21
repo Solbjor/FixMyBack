@@ -17,6 +17,8 @@ import HomeScreen from './src/screens/HomeScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import WelcomeScreen from './src/screens/WelcomeScreen';
 
+const DEV_BYPASS_LOGIN = true;
+
 type TabKey = 'home' | 'camera' | 'profile';
 type AppStage = 'login' | 'welcome' | 'app';
 
@@ -115,9 +117,13 @@ function TabButton({
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabKey>('camera');
-  const [stage, setStage] = useState<AppStage>('login');
-  const [session, setSession] = useState<Session | null>(null);
-  const [loggedIn, setLoggedIn] = useState(false);
+  const [stage, setStage] = useState<AppStage>(DEV_BYPASS_LOGIN ? 'app' : 'login');
+  const [session, setSession] = useState<Session | null>(
+    DEV_BYPASS_LOGIN
+      ? { email: 'dev@localhost', uid: 'dev-uid', idToken: 'dev-token' }
+      : null
+  );
+  const [loggedIn, setLoggedIn] = useState(DEV_BYPASS_LOGIN);
 
   const handleTabPress = (tabKey: TabKey) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {
