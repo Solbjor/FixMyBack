@@ -10,12 +10,12 @@ export const recommendationsRelations = relations(recommendations, ({one}) => ({
 
 export const postureSessionsRelations = relations(postureSessions, ({one, many}) => ({
 	recommendations: many(recommendations),
+	postureMetrics: many(postureMetrics),
+	postureAlerts: many(postureAlerts),
 	user: one(users, {
 		fields: [postureSessions.userId],
 		references: [users.userId]
 	}),
-	postureMetrics: many(postureMetrics),
-	postureAlerts: many(postureAlerts),
 }));
 
 export const progressSnapshotsRelations = relations(progressSnapshots, ({one}) => ({

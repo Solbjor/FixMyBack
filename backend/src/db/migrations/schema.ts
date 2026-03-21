@@ -1,20 +1,7 @@
-import { pgTable, unique, uuid, text, date, numeric, timestamp, foreignKey, check, integer, boolean } from "drizzle-orm/pg-core"
+import { pgTable, foreignKey, check, uuid, text, integer, timestamp, unique, date, numeric, boolean } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
 
-
-export const users = pgTable("users", {
-	userId: uuid("user_id").defaultRandom().primaryKey().notNull(),
-	email: text().notNull(),
-	fullName: text("full_name"),
-	passwordHash: text("password_hash").notNull(),
-	dateOfBirth: date("date_of_birth"),
-	heightIn: numeric("height_in", { precision: 5, scale:  1 }),
-	createdAt: timestamp("created_at", { mode: 'string' }).defaultNow().notNull(),
-	updatedAt: timestamp("updated_at", { mode: 'string' }).defaultNow().notNull(),
-}, (table) => [
-	unique("users_email_key").on(table.email),
-]);
 
 export const recommendations = pgTable("recommendations", {
 	recommendationId: uuid("recommendation_id").defaultRandom().primaryKey().notNull(),
@@ -35,7 +22,7 @@ export const recommendations = pgTable("recommendations", {
 
 export const progressSnapshots = pgTable("progress_snapshots", {
 	snapshotId: uuid("snapshot_id").defaultRandom().primaryKey().notNull(),
-	userId: uuid("user_id").notNull(),
+	userId: text("user_id").notNull(),
 	snapshotDate: date("snapshot_date").notNull(),
 	averageScore: numeric("average_score", { precision: 5, scale:  2 }),
 	sessionsCount: integer("sessions_count").default(0).notNull(),
@@ -53,7 +40,7 @@ export const progressSnapshots = pgTable("progress_snapshots", {
 
 export const userSettings = pgTable("user_settings", {
 	settingId: uuid("setting_id").defaultRandom().primaryKey().notNull(),
-	userId: uuid("user_id").notNull(),
+	userId: text("user_id").notNull(),
 	reminderEnabled: boolean("reminder_enabled").default(true).notNull(),
 	reminderFrequency: integer("reminder_frequency"),
 	preferredAlertType: text("preferred_alert_type"),
@@ -67,21 +54,6 @@ export const userSettings = pgTable("user_settings", {
 		}).onDelete("cascade"),
 	unique("user_settings_user_id_key").on(table.userId),
 	check("user_settings_preferred_alert_type_check", sql`preferred_alert_type = ANY (ARRAY['vibrate'::text, 'sound'::text, 'both'::text])`),
-]);
-
-export const postureSessions = pgTable("posture_sessions", {
-	sessionId: uuid("session_id").defaultRandom().primaryKey().notNull(),
-	userId: uuid("user_id").notNull(),
-	sessionStart: timestamp("session_start", { mode: 'string' }).defaultNow().notNull(),
-	sessionEnd: timestamp("session_end", { mode: 'string' }),
-	overallScore: numeric("overall_score", { precision: 5, scale:  2 }),
-	feedbackSummary: text("feedback_summary"),
-}, (table) => [
-	foreignKey({
-			columns: [table.userId],
-			foreignColumns: [users.userId],
-			name: "posture_sessions_user_id_fkey"
-		}).onDelete("cascade"),
 ]);
 
 export const postureMetrics = pgTable("posture_metrics", {
@@ -117,4 +89,28 @@ export const postureAlerts = pgTable("posture_alerts", {
 			name: "posture_alerts_session_id_fkey"
 		}).onDelete("cascade"),
 	check("posture_alerts_severity_check", sql`severity = ANY (ARRAY['low'::text, 'medium'::text, 'high'::text])`),
+]);
+
+export const users = pgTable("users", {
+	userId: text("user_id").primaryKey().notNull(),
+	fullName: text("full_name"),
+	dateOfBirth: date("date_of_birth"),
+	heightIn: numeric("height_in", { precision: 5, scale:  1 }),
+	createdAt: timestamp("created_at", { mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { mode: 'string' }).defaultNow().notNull(),
+});
+
+export const postureSessions = pgTable("posture_sessions", {
+	sessionId: uuid("session_id").defaultRandom().primaryKey().notNull(),
+	userId: text("user_id").notNull(),
+	sessionStart: timestamp("session_start", { mode: 'string' }).defaultNow().notNull(),
+	sessionEnd: timestamp("session_end", { mode: 'string' }),
+	overallScore: numeric("overall_score", { precision: 5, scale:  2 }),
+	feedbackSummary: text("feedback_summary"),
+}, (table) => [
+	foreignKey({
+			columns: [table.userId],
+			foreignColumns: [users.userId],
+			name: "posture_sessions_user_id_fkey"
+		}).onDelete("cascade"),
 ]);
