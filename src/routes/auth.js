@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const admin = require('../config/firebase');
 const axios = require('axios');
+const { db } = require('../db');
+const { users } = require('../db/schema');
 
 /**
  * POST /auth/signup
@@ -20,6 +22,13 @@ router.post('/signup', async (req, res) => {
       email,
       password,
       ...(displayName && { displayName }),
+    });
+
+    await db.insert(users).values({
+      userId: userRecord.uid,
+      email: userRecord.email,
+      fullName: displayName ?? null,
+      passwordHash: 'firebase_managed',
     });
 
     return res.status(201).json({
