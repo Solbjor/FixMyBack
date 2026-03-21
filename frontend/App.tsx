@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { SERVER_URL } from './src/config';
+import { api } from './src/api';
 import LoginScreen from './src/screens/LoginScreen';
 import CameraScreen from './src/screens/CameraScreen';
 import HomeScreen from './src/screens/HomeScreen';
@@ -117,6 +117,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<TabKey>('camera');
   const [stage, setStage] = useState<AppStage>('login');
   const [session, setSession] = useState<Session | null>(null);
+  const [loggedIn, setLoggedIn] = useState(false);
 
   const handleTabPress = (tabKey: TabKey) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {
@@ -126,18 +127,8 @@ export default function App() {
   };
 
   const handleLogin = async (email: string, password: string) => {
-    const response = await fetch(`${SERVER_URL}/auth/login`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ email, password }),
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.error ?? 'Unable to sign in');
-    }
+    const data = await api.login(email,password);
+    setLoggedIn(true);
 
     setSession({
       email,
@@ -152,18 +143,7 @@ export default function App() {
     password: string,
     displayName: string,
   ) => {
-    const response = await fetch(`${SERVER_URL}/auth/signup`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ email, password, displayName }),
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.error ?? 'Unable to create account');
-    }
+    const data = await api.signup(email, password, displayName)
 
     setSession({
       email: data.email ?? email,
