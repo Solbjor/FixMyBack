@@ -124,15 +124,19 @@ class PostureMonitor:
         self.smoothing_window = smoothing_window
         self.calibration_samples = []
         self.baseline = None
+        self.baseline_variance = None  # Track natural variation during calibration
         self.history = deque(maxlen=smoothing_window)
 
-        # How far each metric can deviate before flagging (tweak these!)
-        self.thresholds = {
-            "shoulder_width": 0.25,      # 25% change in apparent shoulder width
-            "shoulder_tilt": 12.0,       # degrees off level
-            "head_drop_ratio": 0.15,     # normalized drop
-            "forward_head_ratio": 0.12,  # normalized forward drift
-            "head_tilt": 12.0,           # degrees off level
+        # Flexible multi-tier thresholds for each metric
+        # Each metric has: warning_threshold, alert_threshold
+        # warning: minor deviation, alert: significant deviation (flags as bad)
+        # These are MULTIPLIERS of the observed calibration variance
+        self.threshold_multipliers = {
+            "shoulder_width": {"warning": 3.5, "alert": 5.0},        # 1.5-3x std dev
+            "shoulder_tilt": {"warning": 2.5, "alert": 3.5},         # 1.5-2.5x std dev
+            "head_drop_ratio": {"warning": 3.5, "alert": 5.0},       # 1.5-3x std dev
+            "forward_head_ratio": {"warning": 3.5, "alert": 5.0},    # 1.5-3x std dev
+            "head_tilt": {"warning": 2.5, "alert": 3.5},             # 1.5-2.5x std dev
         }
 
     def add_calibration_sample(self, features):
@@ -144,14 +148,48 @@ class PostureMonitor:
             print(f"WARNING: Only {len(self.calibration_samples)} calibration samples. Try to get at least 30.")
 
         self.baseline = {}
+        self.baseline_variance = {}
         keys = self.calibration_samples[0].keys()
+        
         for k in keys:
-            vals = [s[k] for s in self.calibration_samples]
-            self.baseline[k] = np.mean(vals)
+            vals = np.array([s[k] for s in self.calibration_samples])
+            mean_val = np.mean(vals)
+            std_val = np.std(vals)
+            
+            self.baseline[k] = mean_val
+            self.baseline_variance[k] = std_val
+        
+        # Compute dynamic thresholds based on observed variance
+        self.thresholds = {}
+        for k, multipliers in self.threshold_multipliers.items():
+            variance = self.baseline_variance[k]
+            # Use max of: (multiplier * observed_variance) or a reasonable minimum
+            # This adapts to how much natural movement happens during calibration
+            min_threshold = {
+                "shoulder_width": 0.08,
+                "shoulder_tilt": 5.0,
+                "head_drop_ratio": 0.05,
+                "forward_head_ratio": 0.05,
+                "head_tilt": 3.0,
+            }.get(k, 0.05)
+            
+            warning_threshold = max(variance * multipliers["warning"], min_threshold)
+            alert_threshold = max(variance * multipliers["alert"], min_threshold * 2)
+            
+            self.thresholds[k] = {
+                "warning": warning_threshold,
+                "alert": alert_threshold,
+            }
 
         print("--- Baseline established ---")
+        print(f"Calibration samples: {len(self.calibration_samples)}")
+        print("\nMetric baselines & natural variance:")
         for k, v in self.baseline.items():
-            print(f"  {k}: {v:.4f}")
+            var = self.baseline_variance[k]
+            thresh = self.thresholds[k]
+            print(f"  {k}:")
+            print(f"    Baseline: {v:.4f} (±{var:.4f} std dev)")
+            print(f"    Thresholds: ⚠ {thresh['warning']:.4f} | 🔴 {thresh['alert']:.4f}")
         print("----------------------------")
         return self.baseline
 
@@ -167,6 +205,11 @@ class PostureMonitor:
         """
         Compare current (smoothed) features against baseline.
         Returns dict with overall status and per-metric details.
+        
+        Uses tiered thresholds:
+          - "good": all deviations below warning threshold
+          - "caution": some deviations above warning but below alert threshold
+          - "bad": any deviation exceeds alert threshold
         """
         if self.baseline is None:
             return {"overall": "not_calibrated", "details": {}}
@@ -175,9 +218,11 @@ class PostureMonitor:
 
         smoothed = self._smooth(features)
         details = {}
-        any_bad = False
+        overall_status = "good"
+        caution_count = 0
+        alert_count = 0
 
-        for k, threshold in self.thresholds.items():
+        for k, thresholds in self.thresholds.items():
             baseline_val = self.baseline[k]
             current_val = smoothed[k]
 
@@ -194,21 +239,36 @@ class PostureMonitor:
                 # Absolute deviation for ratios
                 deviation = abs(current_val - baseline_val)
 
-            is_bad = deviation > threshold
-            if is_bad:
-                any_bad = True
+            # Determine severity level
+            warning_threshold = thresholds["warning"]
+            alert_threshold = thresholds["alert"]
+            
+            if deviation > alert_threshold:
+                metric_status = "alert"
+                alert_count += 1
+                overall_status = "bad"
+            elif deviation > warning_threshold:
+                metric_status = "caution"
+                caution_count += 1
+                if overall_status == "good":
+                    overall_status = "caution"
+            else:
+                metric_status = "good"
 
             details[k] = {
                 "baseline": baseline_val,
                 "current": current_val,
                 "deviation": deviation,
-                "threshold": threshold,
-                "status": "bad" if is_bad else "good"
+                "warning_threshold": warning_threshold,
+                "alert_threshold": alert_threshold,
+                "status": metric_status
             }
 
         return {
-            "overall": "bad" if any_bad else "good",
-            "details": details
+            "overall": overall_status,
+            "details": details,
+            "metrics_in_caution": caution_count,
+            "metrics_in_alert": alert_count,
         }
 
 
@@ -227,11 +287,12 @@ class PostureScoreTracker:
 
     def __init__(self, rolling_window=60):
         self.rolling_window = rolling_window  # seconds
-        self.records = []       # list of (timestamp, "good"/"bad", details_dict)
+        self.records = []       # list of (timestamp, "good"/"caution"/"bad", details_dict)
         self.session_start = None
         self.streak_state = None
         self.streak_start = None
-        self.metric_bad_counts = {}
+        self.metric_alert_counts = {}  # tracks "alert" level issues
+        self.metric_caution_counts = {}  # tracks "caution" level issues
 
     def record(self, status):
         """Call this every frame with the output of PostureMonitor.evaluate()."""
@@ -252,22 +313,33 @@ class PostureScoreTracker:
             self.streak_state = state
             self.streak_start = now
 
-        # Track which metrics cause the most problems
+        # Track which metrics cause the most problems (both caution and alert)
         for name, info in status["details"].items():
-            if info["status"] == "bad":
-                self.metric_bad_counts[name] = self.metric_bad_counts.get(name, 0) + 1
+            if info["status"] == "alert":
+                self.metric_alert_counts[name] = self.metric_alert_counts.get(name, 0) + 1
+            elif info["status"] == "caution":
+                self.metric_caution_counts[name] = self.metric_caution_counts.get(name, 0) + 1
 
     @property
     def overall_score(self):
-        """Percentage of total recorded frames that were 'good'."""
+        """
+        Percentage of total recorded frames that were 'good'.
+        Caution frames count as 50% credit.
+        Bad frames count as 0%.
+        """
         if not self.records:
             return 0.0
         good = sum(1 for _, s, _ in self.records if s == "good")
-        return (good / len(self.records)) * 100
+        caution = sum(1 for _, s, _ in self.records if s == "caution")
+        score = (good + caution * 0.5) / len(self.records)
+        return score * 100
 
     @property
     def rolling_score(self):
-        """Percentage of frames in the last `rolling_window` seconds that were 'good'."""
+        """
+        Percentage of frames in the last `rolling_window` seconds that were 'good'.
+        Caution frames count as 50% credit.
+        """
         if not self.records:
             return 0.0
         cutoff = time.time() - self.rolling_window
@@ -275,7 +347,9 @@ class PostureScoreTracker:
         if not recent:
             return 0.0
         good = sum(1 for _, s in recent if s == "good")
-        return (good / len(recent)) * 100
+        caution = sum(1 for _, s in recent if s == "caution")
+        score = (good + caution * 0.5) / len(recent)
+        return score * 100
 
     @property
     def streak_seconds(self):
@@ -293,10 +367,17 @@ class PostureScoreTracker:
 
     @property
     def worst_metric(self):
-        """The metric that triggered 'bad' most often, or None."""
-        if not self.metric_bad_counts:
+        """The metric that triggered issues (alert or caution) most often, or None."""
+        # Combine alert and caution counts (alert counts double)
+        combined_counts = {}
+        for name, count in self.metric_alert_counts.items():
+            combined_counts[name] = combined_counts.get(name, 0) + count * 2
+        for name, count in self.metric_caution_counts.items():
+            combined_counts[name] = combined_counts.get(name, 0) + count
+        
+        if not combined_counts:
             return None
-        return max(self.metric_bad_counts, key=self.metric_bad_counts.get)
+        return max(combined_counts, key=combined_counts.get)
 
     def get_summary(self):
         """Return a printable session summary dict."""
@@ -305,9 +386,11 @@ class PostureScoreTracker:
         return {
             "session_duration": f"{mins}m {secs}s",
             "overall_score": f"{self.overall_score:.1f}%",
+            "rolling_score": f"{self.rolling_score:.1f}%",
             "total_frames": len(self.records),
             "worst_metric": self.worst_metric or "none",
-            "metric_bad_counts": dict(self.metric_bad_counts),
+            "metric_alert_counts": dict(self.metric_alert_counts),
+            "metric_caution_counts": dict(self.metric_caution_counts),
         }
 
     def save_report(self, filepath="posture_report.csv"):
@@ -338,3 +421,19 @@ class PostureScoreTracker:
                 writer.writerow(row)
 
         print(f"Report saved to {filepath} ({len(self.records)} rows)")
+
+    def print_threshold_info(self):
+        """Display current threshold configuration."""
+        print("\n╔═══════════════════════════════════════════════════════════╗")
+        print("║         CURRENT POSTURE THRESHOLD CONFIGURATION         ║")
+        print("╠═══════════════════════════════════════════════════════════╣")
+        
+        for metric, thresholds in self.thresholds.items():
+            warning = thresholds["warning"]
+            alert = thresholds["alert"]
+            print(f"║ {metric:30} │ ⚠ {warning:6.2f} │ 🔴 {alert:6.2f}   ║")
+        
+        print("╠═══════════════════════════════════════════════════════════╣")
+        print("║ Legend: ⚠ = Caution threshold | 🔴 = Alert threshold    ║")
+        print("║ Adjust these values in __init__() to fine-tune sensitivity║")
+        print("╚═══════════════════════════════════════════════════════════╝\n")

@@ -104,8 +104,16 @@ def draw_hud(frame, status, tracker, calibrating, cal_count):
         return
 
     # ── Posture status banner ──
-    color = (0, 200, 0) if status["overall"] == "good" else (0, 0, 255)
-    label = "GOOD POSTURE" if status["overall"] == "good" else "FIX YOUR POSTURE"
+    if status["overall"] == "good":
+        color = (0, 200, 0)  # Green
+        label = "GOOD POSTURE"
+    elif status["overall"] == "caution":
+        color = (0, 165, 255)  # Orange
+        label = "CAUTION - Minor issues"
+    else:  # "bad"
+        color = (0, 0, 255)  # Red
+        label = "FIX YOUR POSTURE"
+    
     cv2.putText(frame, label, (20, 45), cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 3)
 
     # ── Score bars ──
@@ -114,10 +122,19 @@ def draw_hud(frame, status, tracker, calibrating, cal_count):
 
     # ── Streak timer ──
     streak_s = tracker.streak_seconds
-    streak_label = "Good" if tracker.streak_state == "good" else "Bad"
+    if tracker.streak_state == "good":
+        streak_label = "Good"
+        streak_color = (0, 200, 0)
+    elif tracker.streak_state == "caution":
+        streak_label = "Caution"
+        streak_color = (0, 165, 255)
+    else:
+        streak_label = "Bad"
+        streak_color = (0, 0, 255)
+    
     mins, secs = divmod(int(streak_s), 60)
     cv2.putText(frame, f"{streak_label} streak: {mins}m {secs:02d}s",
-                (20, 168), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 1)
+                (20, 168), cv2.FONT_HERSHEY_SIMPLEX, 0.55, streak_color, 1)
 
     # ── Session duration ──
     dur = tracker.session_duration
@@ -141,8 +158,18 @@ def draw_hud(frame, status, tracker, calibrating, cal_count):
     # ── Per-metric breakdown (right side) ──
     y_off = 40
     for name, info in status["details"].items():
-        mc = (0, 200, 0) if info["status"] == "good" else (0, 0, 255)
-        text = f"{name}: {info['deviation']:.3f}/{info['threshold']:.3f}"
+        # Color code: green=good, orange=caution, red=alert
+        if info["status"] == "good":
+            mc = (0, 200, 0)
+            threshold_display = f"{info['alert_threshold']:.3f}"
+        elif info["status"] == "caution":
+            mc = (0, 165, 255)
+            threshold_display = f"{info['alert_threshold']:.3f}!"
+        else:  # alert
+            mc = (0, 0, 255)
+            threshold_display = f"{info['alert_threshold']:.3f}!!"
+        
+        text = f"{name}: {info['deviation']:.3f}/{threshold_display}"
         cv2.putText(frame, text, (w - 350, y_off),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, mc, 1)
         y_off += 22
