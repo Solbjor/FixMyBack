@@ -22,4 +22,4 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {console.log('device disconnected:', socket.id);});
 });
 
-server.listen(3000, () => console.log('server running on port 3000'));
+server.listen(4000, () => console.log('server running on port 4000'));
