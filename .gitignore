@@ -7,3 +7,4 @@ frontend/web-build/
 .env
 .env.local
 serviceAccountKey.json
+*node_modules*
