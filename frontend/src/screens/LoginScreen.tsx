@@ -1,8 +1,10 @@
 import * as Haptics from 'expo-haptics';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   Keyboard,
+  LayoutChangeEvent,
   Pressable,
   StyleSheet,
   Text,
@@ -35,6 +37,40 @@ export default function LoginScreen({
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [segmentWidth, setSegmentWidth] = useState(0);
+  const toggleAnim = useRef(new Animated.Value(0)).current;
+  const contentAnim = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    Animated.spring(toggleAnim, {
+      toValue: mode === 'login' ? 0 : 1,
+      useNativeDriver: true,
+      tension: 130,
+      friction: 12,
+    }).start();
+  }, [mode, toggleAnim]);
+
+  const switchMode = (nextMode: AuthMode) => {
+    if (nextMode === mode || loading) {
+      return;
+    }
+
+    Keyboard.dismiss();
+    setError(null);
+
+    Animated.timing(contentAnim, {
+      toValue: 0,
+      duration: 110,
+      useNativeDriver: true,
+    }).start(() => {
+      setMode(nextMode);
+      Animated.timing(contentAnim, {
+        toValue: 1,
+        duration: 180,
+        useNativeDriver: true,
+      }).start();
+    });
+  };
 
   const handleSubmit = async () => {
     if (!email.trim() || !password.trim()) {
@@ -76,6 +112,13 @@ export default function LoginScreen({
     }
   };
 
+  const handleSegmentLayout = (event: LayoutChangeEvent) => {
+    setSegmentWidth(event.nativeEvent.layout.width);
+  };
+
+  const highlightWidth = segmentWidth > 0 ? (segmentWidth - 8) / 2 : 0;
+  const highlightTravel = highlightWidth;
+
   return (
     <SafeAreaView edges={['top']} style={styles.safe}>
       <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
@@ -93,16 +136,27 @@ export default function LoginScreen({
           </View>
 
           <View style={styles.card}>
-            <View style={styles.segmentedShell}>
-              <Pressable
-                onPress={() => {
-                  setMode('login');
-                  setError(null);
-                }}
+            <View onLayout={handleSegmentLayout} style={styles.segmentedShell}>
+              <Animated.View
+                pointerEvents="none"
                 style={[
-                  styles.segment,
-                  mode === 'login' && styles.segmentActive,
+                  styles.segmentHighlight,
+                  segmentWidth > 0 && { width: highlightWidth },
+                  {
+                    transform: [
+                      {
+                        translateX: toggleAnim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [0, highlightTravel],
+                        }),
+                      },
+                    ],
+                  },
                 ]}
+              />
+              <Pressable
+                onPress={() => switchMode('login')}
+                style={styles.segment}
               >
                 <Text
                   style={[
@@ -114,14 +168,8 @@ export default function LoginScreen({
                 </Text>
               </Pressable>
               <Pressable
-                onPress={() => {
-                  setMode('signup');
-                  setError(null);
-                }}
-                style={[
-                  styles.segment,
-                  mode === 'signup' && styles.segmentActive,
-                ]}
+                onPress={() => switchMode('signup')}
+                style={styles.segment}
               >
                 <Text
                   style={[
@@ -134,62 +182,79 @@ export default function LoginScreen({
               </Pressable>
             </View>
 
-            {mode === 'signup' ? (
-              <>
-                <Text style={styles.label}>Name</Text>
-                <TextInput
-                  autoCapitalize="words"
-                  onChangeText={setDisplayName}
-                  placeholder="Andrew"
-                  placeholderTextColor={colors.textMuted}
-                  style={styles.input}
-                  value={displayName}
-                />
-              </>
-            ) : null}
-
-            <Text style={styles.label}>Email</Text>
-            <TextInput
-              autoCapitalize="none"
-              autoComplete="email"
-              keyboardType="email-address"
-              onChangeText={setEmail}
-              placeholder="you@example.com"
-              placeholderTextColor={colors.textMuted}
-              style={styles.input}
-              value={email}
-            />
-
-            <Text style={styles.label}>Password</Text>
-            <TextInput
-              autoCapitalize="none"
-              onChangeText={setPassword}
-              placeholder="Enter password"
-              placeholderTextColor={colors.textMuted}
-              secureTextEntry
-              style={styles.input}
-              value={password}
-            />
-
-            {error && <Text style={styles.error}>{error}</Text>}
-
-            <Pressable
-              disabled={loading}
-              onPress={handleSubmit}
-              style={({ pressed }) => [
-                styles.button,
-                pressed && !loading && styles.buttonPressed,
-                loading && styles.buttonDisabled,
+            <Animated.View
+              style={[
+                styles.formWrap,
+                {
+                  opacity: contentAnim,
+                  transform: [
+                    {
+                      translateY: contentAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [10, 0],
+                      }),
+                    },
+                  ],
+                },
               ]}
             >
-              {loading ? (
-                <ActivityIndicator color={colors.textOnDark} />
-              ) : (
-                <Text style={styles.buttonText}>
-                  {mode === 'login' ? 'Log In' : 'Create Account'}
-                </Text>
-              )}
-            </Pressable>
+              {mode === 'signup' ? (
+                <>
+                  <Text style={styles.label}>Name</Text>
+                  <TextInput
+                    autoCapitalize="words"
+                    onChangeText={setDisplayName}
+                    placeholder="Andrew"
+                    placeholderTextColor={colors.textMuted}
+                    style={styles.input}
+                    value={displayName}
+                  />
+                </>
+              ) : null}
+
+              <Text style={styles.label}>Email</Text>
+              <TextInput
+                autoCapitalize="none"
+                autoComplete="email"
+                keyboardType="email-address"
+                onChangeText={setEmail}
+                placeholder="you@example.com"
+                placeholderTextColor={colors.textMuted}
+                style={styles.input}
+                value={email}
+              />
+
+              <Text style={styles.label}>Password</Text>
+              <TextInput
+                autoCapitalize="none"
+                onChangeText={setPassword}
+                placeholder="Enter password"
+                placeholderTextColor={colors.textMuted}
+                secureTextEntry
+                style={styles.input}
+                value={password}
+              />
+
+              {error && <Text style={styles.error}>{error}</Text>}
+
+              <Pressable
+                disabled={loading}
+                onPress={handleSubmit}
+                style={({ pressed }) => [
+                  styles.button,
+                  pressed && !loading && styles.buttonPressed,
+                  loading && styles.buttonDisabled,
+                ]}
+              >
+                {loading ? (
+                  <ActivityIndicator color={colors.textOnDark} />
+                ) : (
+                  <Text style={styles.buttonText}>
+                    {mode === 'login' ? 'Log In' : 'Create Account'}
+                  </Text>
+                )}
+              </Pressable>
+            </Animated.View>
           </View>
         </View>
       </TouchableWithoutFeedback>
@@ -242,9 +307,18 @@ const styles = StyleSheet.create({
     backgroundColor: '#e5e3df',
     borderRadius: 10,
     flexDirection: 'row',
-    gap: 8,
     marginBottom: 18,
+    overflow: 'hidden',
     padding: 4,
+    position: 'relative',
+  },
+  segmentHighlight: {
+    backgroundColor: brand.orange,
+    borderRadius: 8,
+    bottom: 4,
+    left: 4,
+    position: 'absolute',
+    top: 4,
   },
   segment: {
     alignItems: 'center',
@@ -252,9 +326,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     minHeight: 34,
-  },
-  segmentActive: {
-    backgroundColor: brand.orange,
+    zIndex: 1,
   },
   segmentText: {
     color: colors.textMuted,
@@ -263,6 +335,9 @@ const styles = StyleSheet.create({
   },
   segmentTextActive: {
     color: colors.textOnDark,
+  },
+  formWrap: {
+    minHeight: 278,
   },
   label: {
     color: colors.textMuted,
