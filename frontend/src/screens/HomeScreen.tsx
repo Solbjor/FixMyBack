@@ -155,8 +155,8 @@ function ChevronRight() {
 
 export default function HomeScreen() {
   return (
-    <SafeAreaView style={styles.safe}>
-      <View style={styles.screen}>
+    <SafeAreaView>
+      <View>
         <ScrollView
           contentContainerStyle={styles.scroll}
           showsVerticalScrollIndicator={false}
@@ -231,8 +231,6 @@ export default function HomeScreen() {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  safe:   { flex: 1, backgroundColor: colors.bgPage },
-  screen: { flex: 1, backgroundColor: colors.bgPage },
   scroll: {
     paddingHorizontal: 22,
     paddingTop: 16,
