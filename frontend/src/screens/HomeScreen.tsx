@@ -5,9 +5,9 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  SafeAreaView,
 } from 'react-native';
 import Svg, { Circle, Polyline, Path, Line } from 'react-native-svg';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, fontSize, radius } from '../../constants/theme';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -155,8 +155,8 @@ function ChevronRight() {
 
 export default function HomeScreen() {
   return (
-    <SafeAreaView>
-      <View>
+    <SafeAreaView edges={['top']} style={styles.safe}>
+      <View style={styles.screen}>
         <ScrollView
           contentContainerStyle={styles.scroll}
           showsVerticalScrollIndicator={false}
@@ -231,9 +231,15 @@ export default function HomeScreen() {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
+  safe: {
+    flex: 1,
+  },
+  screen: {
+    flex: 1,
+  },
   scroll: {
     paddingHorizontal: 22,
-    paddingTop: 16,
+    paddingTop: 28,
     paddingBottom: 110,
   },
 
