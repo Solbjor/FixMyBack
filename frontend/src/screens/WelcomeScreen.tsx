@@ -6,12 +6,14 @@ import { brand, colors, fontSize, radius } from '../../constants/theme';
 
 interface WelcomeScreenProps {
   email: string;
+  displayName?: string;
   onContinue: () => void;
   onLogout: () => void;
 }
 
 export default function WelcomeScreen({
   email,
+  displayName,
   onContinue,
   onLogout,
 }: WelcomeScreenProps) {
@@ -22,7 +24,9 @@ export default function WelcomeScreen({
         <View style={styles.orbSmall} />
 
         <Text style={styles.eyebrow}>Welcome</Text>
-        <Text style={styles.title}>You&apos;re in.</Text>
+        <Text style={styles.title}>
+          {displayName ? `You’re in, ${displayName}.` : 'You’re in.'}
+        </Text>
         <Text style={styles.subtitle}>
           Signed in as {email}. Head into the app when you&apos;re ready.
         </Text>
