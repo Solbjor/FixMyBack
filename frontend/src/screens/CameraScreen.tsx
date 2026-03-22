@@ -60,6 +60,7 @@ export default function CameraScreen() {
   const socketRef = useRef<any>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const calibrationTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const calibrationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastAlertRef = useRef<number>(0);
   const screenWidth = Dimensions.get('window').width;
 
@@ -111,12 +112,30 @@ export default function CameraScreen() {
         clearInterval(calibrationTimerRef.current);
         calibrationTimerRef.current = null;
       }
+      if (calibrationTimeoutRef.current) {
+        clearTimeout(calibrationTimeoutRef.current);
+        calibrationTimeoutRef.current = null;
+      }
       showAlert('✅ Baseline established! Starting session...', 'success');
       
       // Now start the actual session
       setTimeout(() => {
         handleStartSession();
       }, 1500);
+    });
+
+    socketRef.current.on('calibration-failed', (data: any) => {
+      console.log('[Calibration] Failed:', data?.message);
+      setIsCalibrating(false);
+      if (calibrationTimerRef.current) {
+        clearInterval(calibrationTimerRef.current);
+        calibrationTimerRef.current = null;
+      }
+      if (calibrationTimeoutRef.current) {
+        clearTimeout(calibrationTimeoutRef.current);
+        calibrationTimeoutRef.current = null;
+      }
+      showAlert(data?.message || 'Calibration failed. Please try again.', 'high');
     });
     
     // Listen for posture alerts from AI
@@ -128,6 +147,7 @@ export default function CameraScreen() {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
       if (calibrationTimerRef.current) clearInterval(calibrationTimerRef.current);
+      if (calibrationTimeoutRef.current) clearTimeout(calibrationTimeoutRef.current);
       socketRef.current?.disconnect();
     };
   }, []);
@@ -155,6 +175,16 @@ export default function CameraScreen() {
         return next;
       });
     }, 1000);
+
+    // Failsafe: if AI never confirms calibration, unblock UI and show actionable error.
+    calibrationTimeoutRef.current = setTimeout(() => {
+      setIsCalibrating(false);
+      if (calibrationTimerRef.current) {
+        clearInterval(calibrationTimerRef.current);
+        calibrationTimerRef.current = null;
+      }
+      showAlert('Calibration timed out. Check AI bridge connection and camera pose visibility.', 'high');
+    }, 22000);
   };
 
   const handleStartSession = async () => {
@@ -166,7 +196,9 @@ export default function CameraScreen() {
       setIsAnalyzing(true);
       timerRef.current = setInterval(() => setElapsedSeconds((c) => c + 1), 1000);
     } catch (error) {
-      setSessionError(error instanceof Error ? error.message : 'Unable to start session.');
+      const message = error instanceof Error ? error.message : 'Unable to start session.';
+      setSessionError(message);
+      showAlert(`Could not start session: ${message}`, 'high');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
     }
   };
@@ -174,6 +206,7 @@ export default function CameraScreen() {
   const handleAiToggle = async () => {
     if (isAnalyzing) {
       // Stop session
+      socketRef.current?.emit('session-stop');
       if (timerRef.current) {
         clearInterval(timerRef.current);
         timerRef.current = null;

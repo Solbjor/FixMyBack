@@ -48,11 +48,29 @@ def run_movenet(frame):
         except ImportError:
             print("WARNING: TensorFlow not available; using mock inference for testing")
             _movenet_loaded = True  # Don't retry
-            return np.random.rand(17, 3)  # Mock keypoints
     
     if movenet is None:
-        # Mock mode if TensorFlow failed
-        return np.random.rand(17, 3)
+        # Mock mode: return stable realistic keypoints (not random)
+        # Format: (y, x, confidence) normalized 0-1
+        return np.array([
+            [0.15, 0.50, 0.9],  # nose
+            [0.12, 0.48, 0.9],  # left_eye
+            [0.12, 0.52, 0.9],  # right_eye
+            [0.14, 0.44, 0.8],  # left_ear
+            [0.14, 0.56, 0.8],  # right_ear
+            [0.30, 0.35, 0.9],  # left_shoulder
+            [0.30, 0.65, 0.9],  # right_shoulder
+            [0.45, 0.25, 0.8],  # left_elbow
+            [0.45, 0.75, 0.8],  # right_elbow
+            [0.55, 0.30, 0.7],  # left_wrist
+            [0.55, 0.70, 0.7],  # right_wrist
+            [0.55, 0.40, 0.9],  # left_hip
+            [0.55, 0.60, 0.9],  # right_hip
+            [0.75, 0.38, 0.8],  # left_knee
+            [0.75, 0.62, 0.8],  # right_knee
+            [0.90, 0.38, 0.7],  # left_ankle
+            [0.90, 0.62, 0.7],  # right_ankle
+        ])
     
     # Real inference
     import tensorflow as tf_module
@@ -333,14 +351,10 @@ def main_stream(socket_url):
         logger.error("Failed to connect. Exiting.")
         return
     
-    logger.info("Connected. Starting calibration in 2 seconds...")
-    import time
-    time.sleep(2)
-    calibrating = True
-    
-    logger.info("[CAL] Calibration started. Collecting 30 samples...")
+    logger.info("Connected. Waiting for calibration trigger from app...")
     
     # Run processing loop (blocks until stop_requested is set)
+    # Calibration will be started by frontend via 'calibrate-start' event
     try:
         bridge.process_frames()
     except KeyboardInterrupt:

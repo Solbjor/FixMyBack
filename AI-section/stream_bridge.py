@@ -75,8 +75,8 @@ class StreamBridge:
         
         # Posture change detection
         self.last_alert_time = 0
-        self.alert_cooldown = 3  # Minimum seconds between alerts
-        self.posture_change_threshold = 0.15  # Normalized distance threshold
+        self.alert_cooldown = 10  # Minimum seconds between alerts
+        self.posture_change_threshold = 0.25  # Normalized distance threshold
         
         # Setup event handlers
         self._setup_socket()
@@ -110,11 +110,17 @@ class StreamBridge:
         @self.sio.on('calibrate-start')
         def on_calibrate_start():
             """Start baseline calibration for 10 seconds."""
-            logger.info("🔄 [CALIBRATION] Starting baseline collection (10s)...")
+            logger.info(f"🔄 [CALIBRATION] Starting baseline collection ({self.calibration_duration}s)...")
             self.calibration_mode = True
             self.calibration_start_time = time.time()
             self.baseline_samples = []
             self.baseline_features = None
+
+        @self.sio.on('session-stop')
+        def on_session_stop():
+            """Stop monitoring when session ends."""
+            logger.info("🛑 [SESSION] Stop signal received. Shutting down...")
+            self.stop()
     
     def connect(self):
         """Establish Socket.IO connection."""
@@ -157,25 +163,36 @@ class StreamBridge:
     
     def _finalize_baseline(self):
         """Compute mean baseline from collected samples."""
-        if not self.baseline_samples:
-            logger.warning("No baseline samples collected!")
+        valid_samples = [s for s in self.baseline_samples if isinstance(s, dict)]
+        if not valid_samples:
+            logger.warning("No valid baseline samples collected.")
+            self.sio.emit('calibration-failed', {
+                'message': 'Calibration failed: no reliable pose samples detected. Ensure your upper body is visible and retry.'
+            })
+            return
+
+        if len(valid_samples) < 10:
+            logger.warning(f"Too few valid baseline samples collected: {len(valid_samples)}")
+            self.sio.emit('calibration-failed', {
+                'message': f'Calibration failed: only {len(valid_samples)} valid samples collected. Keep still and retry.'
+            })
             return
         
         # Average all feature vectors
         baseline_dict = {}
-        for key in self.baseline_samples[0].keys():
-            values = [s[key] for s in self.baseline_samples]
+        for key in valid_samples[0].keys():
+            values = [s[key] for s in valid_samples]
             baseline_dict[key] = float(np.mean(values))
         
         self.baseline_features = baseline_dict
         logger.info(
-            f"✅ [CALIBRATION] Baseline established from {len(self.baseline_samples)}/100 samples\n"
+            f"✅ [CALIBRATION] Baseline established from {len(valid_samples)}/{self.baseline_samples_target} samples\n"
             f"   Baseline: {baseline_dict}"
         )
         
         # Emit calibration-complete event
         self.sio.emit('calibration-complete', {
-            'message': f'Baseline established from {len(self.baseline_samples)} samples (target: 100)'
+            'message': f'Baseline established from {len(valid_samples)} samples (target: {self.baseline_samples_target})'
         })
     
     def _detect_posture_change(self, features: dict) -> bool:
@@ -233,7 +250,7 @@ class StreamBridge:
             if self.calibration_mode and self.calibration_start_time:
                 elapsed = time.time() - self.calibration_start_time
                 if elapsed > self.calibration_duration:
-                    logger.info(f"⏱️  [CALIBRATION] 10s period complete. Finalizing baseline...")
+                    logger.info(f"⏱️  [CALIBRATION] {self.calibration_duration}s period complete. Finalizing baseline...")
                     self._finalize_baseline()
                     self.calibration_mode = False
             
@@ -270,9 +287,10 @@ class StreamBridge:
                 
                 # Handle calibration: collect samples
                 if self.calibration_mode:
-                    self.baseline_samples.append(features)
-                    if len(self.baseline_samples) % 10 == 0:
-                        logger.info(f"   📊 Baseline progress: {len(self.baseline_samples)}/100 samples")
+                    if isinstance(features, dict):
+                        self.baseline_samples.append(features)
+                        if len(self.baseline_samples) % 10 == 0:
+                            logger.info(f"   📊 Baseline progress: {len(self.baseline_samples)}/{self.baseline_samples_target} samples")
                 
                 # Handle detection: check for posture changes (only after calibration)
                 elif self.baseline_features is not None:
