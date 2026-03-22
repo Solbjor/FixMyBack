@@ -71,7 +71,6 @@ export default function WelcomeScreen({
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: colors.bgPage,
   },
   screen: {
     flex: 1,
