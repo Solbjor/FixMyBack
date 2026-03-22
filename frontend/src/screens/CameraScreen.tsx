@@ -1,8 +1,9 @@
 import * as Haptics from 'expo-haptics';
-import { StyleSheet, Text, View, Dimensions, Pressable } from 'react-native';
+import { StyleSheet, Text, View, Dimensions, Pressable, Vibration } from 'react-native';
 import { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { WebView } from 'react-native-webview';
+import { setAudioModeAsync, useAudioPlayer } from 'expo-audio';
 import { api } from '../api';
 import { STREAM_URL } from '../config';
 import { colors, fontSize, radius, brand } from '../../constants/theme';
@@ -25,15 +26,12 @@ const feedHtml = `
       <div id="status">Initializing...</div>
     </div>
     <script>
-      console.log('WebView script loaded');
       let frameCount = 0;
       window.setFrame = function(dataUrl) {
         try {
           frameCount++;
-          const img = document.getElementById('feed');
-          img.src = dataUrl;
-          const status = document.getElementById('status');
-          status.textContent = '✓ Frame ' + frameCount + ' loaded';
+          document.getElementById('feed').src = dataUrl;
+          document.getElementById('status').textContent = '✓ Frame ' + frameCount;
         } catch (e) {
           document.getElementById('status').textContent = 'Error: ' + e.message;
         }
@@ -53,7 +51,84 @@ export default function CameraScreen() {
   const webViewRef = useRef<WebView>(null);
   const socketRef = useRef<any>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const buzzIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const soundModeRef = useRef<'off' | 'caution' | 'bad'>('off');
+  const isAnalyzingRef = useRef(false);
   const screenWidth = Dimensions.get('window').width;
+  const warningPlayer = useAudioPlayer(require('../../assets/warning.wav'));
+
+  const syncIsAnalyzing = (value: boolean) => {
+    isAnalyzingRef.current = value;
+    setIsAnalyzing(value);
+  };
+
+  // ── Vibration helpers ────────────────────────────────────────────────────────
+
+  const stopBuzz = () => {
+    console.log('[CameraScreen] stopBuzz called');
+    if (buzzIntervalRef.current) {
+      clearInterval(buzzIntervalRef.current);
+      buzzIntervalRef.current = null;
+    }
+    Vibration.cancel();
+  };
+
+  const stopWarningSound = async () => {
+    soundModeRef.current = 'off';
+    try {
+      warningPlayer.pause();
+    } catch {}
+    try {
+      warningPlayer.seekTo(0);
+    } catch {}
+  };
+
+  const playWarningSound = async (mode: 'caution' | 'bad') => {
+    if (soundModeRef.current === mode) {
+      return;
+    }
+
+    try {
+      await setAudioModeAsync({
+        playsInSilentMode: true,
+      });
+      warningPlayer.loop = true;
+      warningPlayer.volume = mode === 'bad' ? 1 : 0.45;
+      warningPlayer.seekTo(0);
+      warningPlayer.play();
+      soundModeRef.current = mode;
+    } catch (error) {
+      console.log('[WarningSound]', error);
+    }
+  };
+
+  // Fire immediately then repeat every `intervalMs` using setInterval.
+  // This avoids relying on Vibration's built-in repeat (unreliable on iOS).
+  const startBuzz = (pattern: number[], intervalMs: number) => {
+    console.log('[CameraScreen] startBuzz called', { pattern, intervalMs });
+    stopBuzz(); // clear any previous buzz first
+
+    // Fire immediately — no delay
+    console.log('[CameraScreen] buzzing immediately');
+    Vibration.vibrate(pattern);
+
+    // Then repeat on our own schedule
+    buzzIntervalRef.current = setInterval(() => {
+      console.log('[CameraScreen] buzz tick');
+      Vibration.vibrate(pattern);
+    }, intervalMs);
+  };
+
+  // ── Cleanup on unmount ───────────────────────────────────────────────────────
+  useEffect(() => {
+    return () => {
+      stopBuzz();
+      soundModeRef.current = 'off';
+      try {
+        warningPlayer.pause();
+      } catch {}
+    };
+  }, [warningPlayer]);
 
   const formatElapsed = (totalSeconds: number) => {
     const h = String(Math.floor(totalSeconds / 3600)).padStart(2, '0');
@@ -63,18 +138,18 @@ export default function CameraScreen() {
   };
 
   const getStatusLabel = (status: string) => {
-    if (status === 'good') return 'GOOD';
-    if (status === 'caution') return 'CAUTION';
-    if (status === 'bad') return 'BAD';
-    if (status === 'no_pose') return 'NO POSE';
+    if (status === 'good')        return 'GOOD';
+    if (status === 'caution')     return 'CAUTION';
+    if (status === 'bad')         return 'BAD';
+    if (status === 'no_pose')     return 'NO POSE';
     if (status === 'calibrating') return 'CALIBRATING';
     return 'WAITING';
   };
 
   const getStatusColors = (status: string) => {
-    if (status === 'good') return { bg: '#dcfce7', fg: '#166534' };
-    if (status === 'caution') return { bg: '#fef3c7', fg: '#92400e' };
-    if (status === 'bad') return { bg: '#fee2e2', fg: '#991b1b' };
+    if (status === 'good')        return { bg: '#dcfce7', fg: '#166534' };
+    if (status === 'caution')     return { bg: '#fef3c7', fg: '#92400e' };
+    if (status === 'bad')         return { bg: '#fee2e2', fg: '#991b1b' };
     if (status === 'calibrating') return { bg: '#dbeafe', fg: '#1d4ed8' };
     return { bg: '#e5e7eb', fg: '#374151' };
   };
@@ -83,19 +158,40 @@ export default function CameraScreen() {
     socketRef.current = io(STREAM_URL);
     socketRef.current.on('connect',    () => setConnected(true));
     socketRef.current.on('disconnect', () => setConnected(false));
+
     socketRef.current.on('frame', (data: string) => {
       const escapedData = data.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
       webViewRef.current?.injectJavaScript(`window.setFrame('${escapedData}'); true;`);
     });
+
     socketRef.current.on('posture-update', (payload: any) => {
-      if (payload?.calibrating) {
-        setPoseStatus('calibrating');
-      } else if (payload?.status) {
-        setPoseStatus(payload.status);
+      console.log('[CameraScreen] posture-update payload', payload);
+      let nextStatus = 'idle';
+      if (payload?.calibrating)  nextStatus = 'calibrating';
+      else if (payload?.status)  nextStatus = payload.status;
+
+      if (nextStatus === 'bad') {
+        console.log('[CameraScreen] payload.status is BAD, starting alert');
+        startBuzz([0, 300, 150, 300], 1200);
+        void playWarningSound('bad');
+      } else if (nextStatus === 'caution') {
+        console.log('[CameraScreen] payload.status is CAUTION, starting alert');
+        startBuzz([0, 180], 2200);
+        void playWarningSound('caution');
+      } else {
+        console.log('[CameraScreen] payload.status does not require alert', nextStatus);
+        stopBuzz();
+        void stopWarningSound();
       }
+
+      console.log('[CameraScreen] setting poseStatus', nextStatus);
+      setPoseStatus(nextStatus);
     });
+
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
+      stopBuzz();
+      void stopWarningSound();
       socketRef.current?.disconnect();
     };
   }, []);
@@ -103,15 +199,18 @@ export default function CameraScreen() {
   const handleAiToggle = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
 
-    if (isAnalyzing) {
+    if (isAnalyzingRef.current) {
       if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+      stopBuzz();
+      void stopWarningSound();
       try {
         if (sessionId) await api.endSession(sessionId);
       } catch (error) {
         setSessionError(error instanceof Error ? error.message : 'Unable to end session.');
       } finally {
-        setIsAnalyzing(false);
+        syncIsAnalyzing(false);
         setSessionId(null);
+        setPoseStatus('idle');
       }
       return;
     }
@@ -121,7 +220,8 @@ export default function CameraScreen() {
       const session = await api.startSession();
       setSessionId(session.sessionId ?? session.id ?? null);
       setElapsedSeconds(0);
-      setIsAnalyzing(true);
+      setPoseStatus('idle');
+      syncIsAnalyzing(true);
       timerRef.current = setInterval(() => setElapsedSeconds((c) => c + 1), 1000);
     } catch (error) {
       setSessionError(error instanceof Error ? error.message : 'Unable to start session.');
@@ -135,24 +235,9 @@ export default function CameraScreen() {
         <View style={styles.previewCard}>
           <View style={styles.cardHeader}>
             <Text style={styles.eyebrow}>Camera</Text>
-            <View
-              style={[
-                styles.connectionPill,
-                { backgroundColor: connected ? '#dcfce7' : '#fee2e2' },
-              ]}
-            >
-              <View
-                style={[
-                  styles.connectionDot,
-                  { backgroundColor: connected ? brand.green : brand.red },
-                ]}
-              />
-              <Text
-                style={[
-                  styles.connectionText,
-                  { color: connected ? '#166534' : '#991b1b' },
-                ]}
-              >
+            <View style={[styles.connectionPill, { backgroundColor: connected ? '#dcfce7' : '#fee2e2' }]}>
+              <View style={[styles.connectionDot, { backgroundColor: connected ? brand.green : brand.red }]} />
+              <Text style={[styles.connectionText, { color: connected ? '#166534' : '#991b1b' }]}>
                 {connected ? 'Connected' : 'Disconnected'}
               </Text>
             </View>
@@ -160,9 +245,7 @@ export default function CameraScreen() {
 
           <Text style={styles.title}>Scan posture</Text>
 
-          <View
-            style={[styles.feedContainer, { height: (screenWidth - 48) * 0.75 }]}
-          >
+          <View style={[styles.feedContainer, { height: (screenWidth - 48) * 0.75 }]}>
             <WebView
               ref={webViewRef}
               source={{ html: feedHtml }}
@@ -174,20 +257,8 @@ export default function CameraScreen() {
             />
           </View>
 
-          <View
-            style={[
-              styles.statusBadge,
-              {
-                backgroundColor: getStatusColors(poseStatus).bg,
-              },
-            ]}
-          >
-            <Text
-              style={[
-                styles.statusBadgeText,
-                { color: getStatusColors(poseStatus).fg },
-              ]}
-            >
+          <View style={[styles.statusBadge, { backgroundColor: getStatusColors(poseStatus).bg }]}>
+            <Text style={[styles.statusBadgeText, { color: getStatusColors(poseStatus).fg }]}>
               {getStatusLabel(poseStatus)}
             </Text>
           </View>
@@ -207,21 +278,10 @@ export default function CameraScreen() {
                 pressed && styles.shutterPressed,
               ]}
             >
-              <View
-                style={[
-                  styles.shutterRing,
-                  isAnalyzing && styles.shutterRingActive,
-                ]}
-              >
-                <View
-                  style={[
-                    styles.shutterInner,
-                    isAnalyzing && styles.shutterInnerActive,
-                  ]}
-                />
+              <View style={[styles.shutterRing, isAnalyzing && styles.shutterRingActive]}>
+                <View style={[styles.shutterInner, isAnalyzing && styles.shutterInnerActive]} />
               </View>
             </Pressable>
-
             <Text style={styles.aiButtonLabel}>
               {isAnalyzing ? 'Tap to stop' : 'Tap to start'}
             </Text>
@@ -233,6 +293,8 @@ export default function CameraScreen() {
               <Text style={styles.analyzingText}>AI posture scan running</Text>
             </View>
           )}
+
+          {sessionError ? <Text style={styles.sessionError}>{sessionError}</Text> : null}
         </View>
       </View>
     </View>
@@ -253,8 +315,6 @@ const styles = StyleSheet.create({
     maxWidth: 390,
     width: '100%',
   },
-
-  // ── Card ──
   previewCard: {
     backgroundColor: colors.bgCard,
     borderColor: colors.borderLight,
@@ -289,15 +349,8 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: radius.full,
   },
-  connectionDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  connectionText: {
-    fontSize: fontSize.xs,
-    fontWeight: '600',
-  },
+  connectionDot: { width: 6, height: 6, borderRadius: 3 },
+  connectionText: { fontSize: fontSize.xs, fontWeight: '600' },
   title: {
     fontSize: fontSize['3xl'],
     fontWeight: '700',
@@ -322,8 +375,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.6,
   },
-
-  // ── Controls ──
   controls: {
     alignItems: 'center',
     gap: 12,
@@ -336,10 +387,7 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
     letterSpacing: 1,
   },
-  timerActive: {
-    color: colors.textPrimary,
-  },
-
+  timerActive: { color: colors.textPrimary },
   shutterStack: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -351,8 +399,6 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     textAlign: 'center',
   },
-
-  // ── Shutter button — light outer, white inner ──
   shutterOuter: {
     width: 80,
     height: 80,
@@ -368,10 +414,7 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 6,
   },
-  shutterOuterActive: {
-    backgroundColor: '#fff3f0',
-    borderColor: '#f1b2a7',
-  },
+  shutterOuterActive: { backgroundColor: '#fff3f0', borderColor: '#f1b2a7' },
   shutterRing: {
     width: 68,
     height: 68,
@@ -381,26 +424,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  shutterRingActive: {
-    borderColor: '#d94040',
-  },
+  shutterRingActive: { borderColor: '#d94040' },
   shutterInner: {
     width: 52,
     height: 52,
     borderRadius: 26,
-    backgroundColor: '#ffffff',   // white circle inside
+    backgroundColor: '#ffffff',
   },
   shutterInnerActive: {
     width: 24,
     height: 24,
-    borderRadius: 6,              // becomes a rounded square when recording (stop icon)
+    borderRadius: 6,
     backgroundColor: '#ffffff',
   },
-  shutterPressed: {
-    transform: [{ scale: 0.94 }],
-  },
-
-  // Analyzing badge
+  shutterPressed: { transform: [{ scale: 0.94 }] },
   analyzingBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -420,5 +457,10 @@ const styles = StyleSheet.create({
     fontSize: fontSize.xs,
     fontWeight: '600',
     color: brand.red,
+  },
+  sessionError: {
+    color: colors.alertError,
+    fontSize: fontSize.xs,
+    textAlign: 'center',
   },
 });
