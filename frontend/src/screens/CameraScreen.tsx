@@ -1,5 +1,5 @@
 import * as Haptics from 'expo-haptics';
-import { StyleSheet, Text, View, Dimensions, Pressable, Vibration } from 'react-native';
+import { StyleSheet, Text, View, Dimensions, Pressable, Vibration, Modal } from 'react-native';
 import { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { WebView } from 'react-native-webview';
@@ -44,6 +44,8 @@ const feedHtml = `
 export default function CameraScreen() {
   const [connected, setConnected] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isCalibrating, setIsCalibrating] = useState(false);
+  const [calibrationCountdown, setCalibrationCountdown] = useState(15);
   const [poseStatus, setPoseStatus] = useState('idle');
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -56,15 +58,25 @@ export default function CameraScreen() {
   const webViewRef = useRef<WebView>(null);
   const socketRef = useRef<any>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const calibrationTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const calibrationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const buzzIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const soundModeRef = useRef<'off' | 'caution' | 'bad'>('off');
   const isAnalyzingRef = useRef(false);
+  const sessionSummaryRef = useRef<any>(null);
   const screenWidth = Dimensions.get('window').width;
   const warningPlayer = useAudioPlayer(require('../../assets/warning.wav'));
 
   const syncIsAnalyzing = (value: boolean) => {
     isAnalyzingRef.current = value;
     setIsAnalyzing(value);
+  };
+
+  const showAlert = (message: string, severity: string = 'medium') => {
+    setAlert({ visible: true, message, severity });
+    setTimeout(() => {
+      setAlert((current) => ({ ...current, visible: false }));
+    }, 2500);
   };
 
   // ── Vibration helpers ────────────────────────────────────────────────────────
@@ -193,8 +205,45 @@ export default function CameraScreen() {
       setPoseStatus(nextStatus);
     });
 
+    socketRef.current.on('calibration-complete', (payload: any) => {
+      if (calibrationTimerRef.current) {
+        clearInterval(calibrationTimerRef.current);
+        calibrationTimerRef.current = null;
+      }
+      if (calibrationTimeoutRef.current) {
+        clearTimeout(calibrationTimeoutRef.current);
+        calibrationTimeoutRef.current = null;
+      }
+      setIsCalibrating(false);
+      setCalibrationCountdown(15);
+      setPoseStatus('idle');
+      showAlert(payload?.message || 'Calibration complete.', 'success');
+      void handleStartSession();
+    });
+
+    socketRef.current.on('calibration-failed', (payload: any) => {
+      if (calibrationTimerRef.current) {
+        clearInterval(calibrationTimerRef.current);
+        calibrationTimerRef.current = null;
+      }
+      if (calibrationTimeoutRef.current) {
+        clearTimeout(calibrationTimeoutRef.current);
+        calibrationTimeoutRef.current = null;
+      }
+      setIsCalibrating(false);
+      setCalibrationCountdown(15);
+      setPoseStatus('idle');
+      showAlert(payload?.message || 'Calibration failed.', 'high');
+    });
+
+    socketRef.current.on('session-summary', (payload: any) => {
+      sessionSummaryRef.current = payload;
+    });
+
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
+      if (calibrationTimerRef.current) clearInterval(calibrationTimerRef.current);
+      if (calibrationTimeoutRef.current) clearTimeout(calibrationTimeoutRef.current);
       stopBuzz();
       void stopWarningSound();
       socketRef.current?.disconnect();
@@ -225,19 +274,32 @@ export default function CameraScreen() {
       });
     }, 1000);
 
-    if (isAnalyzingRef.current) {
-      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-      stopBuzz();
-      void stopWarningSound();
-      try {
-        if (sessionId) await api.endSession(sessionId);
-      } catch (error) {
-        setSessionError(error instanceof Error ? error.message : 'Unable to end session.');
-      } finally {
-        syncIsAnalyzing(false);
-        setSessionId(null);
-        setPoseStatus('idle');
+    calibrationTimeoutRef.current = setTimeout(async () => {
+      if (calibrationTimerRef.current) {
+        clearInterval(calibrationTimerRef.current);
+        calibrationTimerRef.current = null;
       }
+      setIsCalibrating(false);
+      setCalibrationCountdown(15);
+
+      if (isAnalyzingRef.current) {
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+          timerRef.current = null;
+        }
+        stopBuzz();
+        void stopWarningSound();
+        try {
+          if (sessionId) await api.endSession(sessionId);
+        } catch (error) {
+          setSessionError(error instanceof Error ? error.message : 'Unable to end session.');
+        } finally {
+          syncIsAnalyzing(false);
+          setSessionId(null);
+          setPoseStatus('idle');
+        }
+      }
+
       showAlert('Calibration timed out. Check AI bridge connection and camera pose visibility.', 'high');
     }, 22000);
   };
@@ -511,6 +573,9 @@ const styles = StyleSheet.create({
     elevation: 6,
   },
   shutterOuterActive: { backgroundColor: '#fff3f0', borderColor: '#f1b2a7' },
+  shutterOuterDisabled: {
+    opacity: 0.55,
+  },
   shutterRing: {
     width: 68,
     height: 68,
@@ -557,6 +622,37 @@ const styles = StyleSheet.create({
   sessionError: {
     color: colors.alertError,
     fontSize: fontSize.xs,
+    textAlign: 'center',
+  },
+  alertOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(17, 24, 39, 0.32)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  alertBox: {
+    width: '100%',
+    maxWidth: 320,
+    backgroundColor: '#fff7ed',
+    borderColor: '#fdba74',
+    borderWidth: 1,
+    borderRadius: radius.lg,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+  },
+  alertBoxHigh: {
+    backgroundColor: '#fef2f2',
+    borderColor: '#fca5a5',
+  },
+  alertBoxSuccess: {
+    backgroundColor: '#f0fdf4',
+    borderColor: '#86efac',
+  },
+  alertText: {
+    color: colors.textPrimary,
+    fontSize: fontSize.sm,
+    fontWeight: '600',
     textAlign: 'center',
   },
 });

@@ -155,9 +155,10 @@ function ChevronRight() {
 
 interface HomeScreenProps {
   onOpenStretches?: () => void;
+  displayName?: string;
 }
 
-export default function HomeScreen({ onOpenStretches }: HomeScreenProps) {
+export default function HomeScreen({ onOpenStretches, displayName }: HomeScreenProps) {
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.screen}>
