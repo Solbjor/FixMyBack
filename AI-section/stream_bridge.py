@@ -65,6 +65,19 @@ class StreamBridge:
         self.inference_times = deque(maxlen=100)
         self.last_log_time = time.time()
         
+        # Calibration & baseline state
+        self.calibration_mode = False
+        self.calibration_start_time = None
+        self.calibration_duration = 15  # seconds (collect ~100 samples at 7 FPS avg)
+        self.baseline_samples = []  # List of feature dicts
+        self.baseline_samples_target = 100  # Collect 100 samples for robust baseline
+        self.baseline_features = None  # Computed mean feature vector
+        
+        # Posture change detection
+        self.last_alert_time = 0
+        self.alert_cooldown = 3  # Minimum seconds between alerts
+        self.posture_change_threshold = 0.15  # Normalized distance threshold
+        
         # Setup event handlers
         self._setup_socket()
     
@@ -93,6 +106,15 @@ class StreamBridge:
                 self.frames_dropped_total += 1
             
             self.frame_queue.append(data)
+        
+        @self.sio.on('calibrate-start')
+        def on_calibrate_start():
+            """Start baseline calibration for 10 seconds."""
+            logger.info("🔄 [CALIBRATION] Starting baseline collection (10s)...")
+            self.calibration_mode = True
+            self.calibration_start_time = time.time()
+            self.baseline_samples = []
+            self.baseline_features = None
     
     def connect(self):
         """Establish Socket.IO connection."""
@@ -133,14 +155,87 @@ class StreamBridge:
             logger.warning(f"Decode error: {e}")
             return None
     
+    def _finalize_baseline(self):
+        """Compute mean baseline from collected samples."""
+        if not self.baseline_samples:
+            logger.warning("No baseline samples collected!")
+            return
+        
+        # Average all feature vectors
+        baseline_dict = {}
+        for key in self.baseline_samples[0].keys():
+            values = [s[key] for s in self.baseline_samples]
+            baseline_dict[key] = float(np.mean(values))
+        
+        self.baseline_features = baseline_dict
+        logger.info(
+            f"✅ [CALIBRATION] Baseline established from {len(self.baseline_samples)}/100 samples\n"
+            f"   Baseline: {baseline_dict}"
+        )
+        
+        # Emit calibration-complete event
+        self.sio.emit('calibration-complete', {
+            'message': f'Baseline established from {len(self.baseline_samples)} samples (target: 100)'
+        })
+    
+    def _detect_posture_change(self, features: dict) -> bool:
+        """
+        Compare current features to baseline.
+        Return True if significant change detected.
+        """
+        if self.baseline_features is None:
+            return False
+        
+        # Compute weighted distance from baseline
+        max_distance = 0.0
+        for key in self.baseline_features:
+            if key in features:
+                baseline_val = self.baseline_features[key]
+                current_val = features[key]
+                
+                # Normalize by expected range (~180 deg for angles, 1.0 for normalized metrics)
+                if 'angle' in key.lower():
+                    normalized_dist = abs(current_val - baseline_val) / 180.0
+                else:
+                    normalized_dist = abs(current_val - baseline_val)
+                
+                max_distance = max(max_distance, normalized_dist)
+        
+        return max_distance > self.posture_change_threshold
+    
+    def _send_alert(self, alert_type: str, message: str, severity: str = 'medium'):
+        """Rate-limited posture alert emission."""
+        now = time.time()
+        if now - self.last_alert_time < self.alert_cooldown:
+            return  # Too soon, ignore
+        
+        self.last_alert_time = now
+        logger.warning(f"🚨 [ALERT] {alert_type}: {message} (severity: {severity})")
+        
+        # Emit via Socket.IO so frontend receives it
+        self.sio.emit('posture-alert', {
+            'type': alert_type,
+            'message': message,
+            'severity': severity,
+            'timestamp': now
+        })
+    
     def process_frames(self):
         """
-        Worker loop: dequeue frames, run inference, apply throttling.
+        Worker loop: dequeue frames, run inference, handle calibration & detection.
         Call this in a thread or main loop.
         """
         iterations = 0
         while not self.stop_requested.is_set():
             iterations += 1
+            
+            # Check if calibration period has ended
+            if self.calibration_mode and self.calibration_start_time:
+                elapsed = time.time() - self.calibration_start_time
+                if elapsed > self.calibration_duration:
+                    logger.info(f"⏱️  [CALIBRATION] 10s period complete. Finalizing baseline...")
+                    self._finalize_baseline()
+                    self.calibration_mode = False
             
             # Throttle: only process if enough time has elapsed
             now = time.time()
@@ -173,7 +268,25 @@ class StreamBridge:
                 infer_time = time.time() - t0
                 self.inference_times.append(infer_time)
                 
-                # Callback for consumer (e.g., monitoring, alerts)
+                # Handle calibration: collect samples
+                if self.calibration_mode:
+                    self.baseline_samples.append(features)
+                    if len(self.baseline_samples) % 10 == 0:
+                        logger.info(f"   📊 Baseline progress: {len(self.baseline_samples)}/100 samples")
+                
+                # Handle detection: check for posture changes (only after calibration)
+                elif self.baseline_features is not None:
+                    if self._detect_posture_change(features):
+                        # Extract primary alert metrics
+                        primary_msg = "Poor posture detected"
+                        if features.get('neck_angle', 0) > 30:
+                            primary_msg = "⚠️ Neck angle too high"
+                        elif features.get('shoulder_tilt', 0) > 20:
+                            primary_msg = "⚠️ Shoulder misaligned"
+                        
+                        self._send_alert('posture_change', primary_msg, 'medium')
+                
+                # Callback for consumer
                 self.post_inference_cb(frame, keypoints, features)
                 
                 self.frames_processed += 1

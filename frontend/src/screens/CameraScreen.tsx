@@ -1,5 +1,5 @@
 import * as Haptics from 'expo-haptics';
-import { StyleSheet, Text, View, Dimensions, Pressable } from 'react-native';
+import { StyleSheet, Text, View, Dimensions, Pressable, Modal, Alert } from 'react-native';
 import { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { WebView } from 'react-native-webview';
@@ -46,12 +46,21 @@ const feedHtml = `
 export default function CameraScreen() {
   const [connected, setConnected] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isCalibrating, setIsCalibrating] = useState(false);
+  const [calibrationCountdown, setCalibrationCountdown] = useState(10);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
+  const [alert, setAlert] = useState<{ visible: boolean; message: string; severity: string }>({
+    visible: false,
+    message: '',
+    severity: 'medium',
+  });
   const webViewRef = useRef<WebView>(null);
   const socketRef = useRef<any>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const calibrationTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastAlertRef = useRef<number>(0);
   const screenWidth = Dimensions.get('window').width;
 
   const formatElapsed = (totalSeconds: number) => {
@@ -61,25 +70,114 @@ export default function CameraScreen() {
     return `${h}:${m}:${s}`;
   };
 
+  const showAlert = (message: string, severity: string = 'medium') => {
+    const now = Date.now();
+    // Rate limit: minimum 2 seconds between alerts
+    if (now - lastAlertRef.current < 2000) return;
+    
+    lastAlertRef.current = now;
+    setAlert({ visible: true, message, severity });
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+    
+    // Auto-dismiss after 4 seconds
+    setTimeout(() => {
+      setAlert(prev => ({ ...prev, visible: false }));
+    }, 4000);
+  };
+
   useEffect(() => {
     socketRef.current = io(STREAM_URL);
-    socketRef.current.on('connect',    () => setConnected(true));
-    socketRef.current.on('disconnect', () => setConnected(false));
+    
+    socketRef.current.on('connect', () => {
+      setConnected(true);
+      console.log('[Socket] Connected to relay');
+    });
+    
+    socketRef.current.on('disconnect', () => {
+      setConnected(false);
+      console.log('[Socket] Disconnected from relay');
+    });
+    
     socketRef.current.on('frame', (data: string) => {
       const escapedData = data.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
       webViewRef.current?.injectJavaScript(`window.setFrame('${escapedData}'); true;`);
     });
+    
+    // Listen for calibration completion
+    socketRef.current.on('calibration-complete', (data: any) => {
+      console.log('[Calibration] Complete:', data.message);
+      setIsCalibrating(false);
+      if (calibrationTimerRef.current) {
+        clearInterval(calibrationTimerRef.current);
+        calibrationTimerRef.current = null;
+      }
+      showAlert('✅ Baseline established! Starting session...', 'success');
+      
+      // Now start the actual session
+      setTimeout(() => {
+        handleStartSession();
+      }, 1500);
+    });
+    
+    // Listen for posture alerts from AI
+    socketRef.current.on('posture-alert', (data: any) => {
+      console.log('[Alert]', data.message, `[${data.severity}]`);
+      showAlert(data.message, data.severity);
+    });
+    
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
+      if (calibrationTimerRef.current) clearInterval(calibrationTimerRef.current);
       socketRef.current?.disconnect();
     };
   }, []);
 
-  const handleAiToggle = async () => {
+  const handleStartCalibration = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    
+    console.log('[Calibration] Starting 15-second baseline collection (100 samples)...');
+    setIsCalibrating(true);
+    setCalibrationCountdown(15);
+    
+    // Emit calibrate-start to the relay, which forwards to AI
+    socketRef.current?.emit('calibrate-start');
+    
+    // Countdown timer
+    calibrationTimerRef.current = setInterval(() => {
+      setCalibrationCountdown((prev) => {
+        const next = prev - 1;
+        if (next <= 0) {
+          if (calibrationTimerRef.current) {
+            clearInterval(calibrationTimerRef.current);
+            calibrationTimerRef.current = null;
+          }
+        }
+        return next;
+      });
+    }, 1000);
+  };
 
+  const handleStartSession = async () => {
+    try {
+      setSessionError(null);
+      const session = await api.startSession();
+      setSessionId(session.sessionId ?? session.id ?? null);
+      setElapsedSeconds(0);
+      setIsAnalyzing(true);
+      timerRef.current = setInterval(() => setElapsedSeconds((c) => c + 1), 1000);
+    } catch (error) {
+      setSessionError(error instanceof Error ? error.message : 'Unable to start session.');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+    }
+  };
+
+  const handleAiToggle = async () => {
     if (isAnalyzing) {
-      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+      // Stop session
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
       try {
         if (sessionId) await api.endSession(sessionId);
       } catch (error) {
@@ -91,16 +189,9 @@ export default function CameraScreen() {
       return;
     }
 
-    try {
-      setSessionError(null);
-      const session = await api.startSession();
-      setSessionId(session.sessionId ?? session.id ?? null);
-      setElapsedSeconds(0);
-      setIsAnalyzing(true);
-      timerRef.current = setInterval(() => setElapsedSeconds((c) => c + 1), 1000);
-    } catch (error) {
-      setSessionError(error instanceof Error ? error.message : 'Unable to start session.');
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+    // Not analyzing -> start calibration
+    if (!isCalibrating) {
+      await handleStartCalibration();
     }
   };
 
@@ -152,22 +243,25 @@ export default function CameraScreen() {
 
         <View style={styles.controls}>
           <Text style={[styles.timerText, isAnalyzing && styles.timerActive]}>
-            {formatElapsed(elapsedSeconds)}
+            {isCalibrating ? `Calibrating: ${calibrationCountdown}s` : formatElapsed(elapsedSeconds)}
           </Text>
 
           <View style={styles.shutterStack}>
             <Pressable
               onPress={handleAiToggle}
+              disabled={isCalibrating}
               style={({ pressed }) => [
                 styles.shutterOuter,
                 isAnalyzing && styles.shutterOuterActive,
-                pressed && styles.shutterPressed,
+                isCalibrating && styles.shutterOuterDisabled,
+                pressed && !isCalibrating && styles.shutterPressed,
               ]}
             >
               <View
                 style={[
                   styles.shutterRing,
                   isAnalyzing && styles.shutterRingActive,
+                  isCalibrating && styles.shutterRingCalibrating,
                 ]}
               >
                 <View
@@ -180,7 +274,11 @@ export default function CameraScreen() {
             </Pressable>
 
             <Text style={styles.aiButtonLabel}>
-              {isAnalyzing ? 'Tap to stop' : 'Tap to start'}
+              {isCalibrating
+                ? 'Calibrating...'
+                : isAnalyzing
+                ? 'Tap to stop'
+                : 'Tap to start'}
             </Text>
           </View>
 
@@ -192,6 +290,25 @@ export default function CameraScreen() {
           )}
         </View>
       </View>
+
+      {/* Alert Modal */}
+      <Modal
+        visible={alert.visible}
+        transparent
+        animationType="fade"
+      >
+        <View style={styles.alertOverlay}>
+          <View
+            style={[
+              styles.alertBox,
+              alert.severity === 'high' && styles.alertBoxHigh,
+              alert.severity === 'success' && styles.alertBoxSuccess,
+            ]}
+          >
+            <Text style={styles.alertText}>{alert.message}</Text>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -278,7 +395,7 @@ const styles = StyleSheet.create({
     fontSize: fontSize['2xl'],
     fontWeight: '600',
     color: colors.textMuted,
-    fontVariant: ['tabular-nums'],
+    fontVariant: ['tabular-nums'] as any,
     letterSpacing: 1,
   },
   timerActive: {
@@ -317,6 +434,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff3f0',
     borderColor: '#f1b2a7',
   },
+  shutterOuterDisabled: {
+    backgroundColor: '#e8e8e8',
+    opacity: 0.6,
+  },
   shutterRing: {
     width: 68,
     height: 68,
@@ -328,6 +449,10 @@ const styles = StyleSheet.create({
   },
   shutterRingActive: {
     borderColor: '#d94040',
+  },
+  shutterRingCalibrating: {
+    borderColor: '#3b82f6',
+    borderWidth: 3,
   },
   shutterInner: {
     width: 52,
@@ -365,5 +490,41 @@ const styles = StyleSheet.create({
     fontSize: fontSize.xs,
     fontWeight: '600',
     color: brand.red,
+  },
+
+  // Alert Modal
+  alertOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  alertBox: {
+    maxWidth: '80%',
+    backgroundColor: '#fef08a',
+    borderRadius: radius.lg,
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderLeftWidth: 4,
+    borderLeftColor: '#eab308',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  alertBoxHigh: {
+    backgroundColor: '#fee2e2',
+    borderLeftColor: brand.red,
+  },
+  alertBoxSuccess: {
+    backgroundColor: '#dcfce7',
+    borderLeftColor: brand.green,
+  },
+  alertText: {
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+    color: '#333',
+    textAlign: 'center',
   },
 });
