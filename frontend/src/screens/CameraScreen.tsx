@@ -77,6 +77,8 @@ export default function CameraScreen() {
     soundModeRef.current = 'off';
     try {
       warningPlayer.pause();
+    } catch {}
+    try {
       warningPlayer.seekTo(0);
     } catch {}
   };
@@ -88,8 +90,7 @@ export default function CameraScreen() {
 
     try {
       await setAudioModeAsync({
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
+        playsInSilentMode: true,
       });
       warningPlayer.loop = true;
       warningPlayer.volume = mode === 'bad' ? 1 : 0.45;
@@ -118,43 +119,14 @@ export default function CameraScreen() {
     }, intervalMs);
   };
 
-  // ── React to poseStatus changes ──────────────────────────────────────────────
-  useEffect(() => {
-    console.log('[CameraScreen] poseStatus effect', {
-      poseStatus,
-      isAnalyzing,
-    });
-
-    if (!isAnalyzing) {
-      console.log('[CameraScreen] not analyzing, stopping buzz');
-      stopBuzz();
-      void stopWarningSound();
-      return;
-    }
-
-    if (poseStatus === 'bad') {
-      console.log('[CameraScreen] BAD status received');
-      // Double buzz pattern, repeats every 2s
-      startBuzz([0, 300, 150, 300], 200);
-      void playWarningSound('bad');
-    } else if (poseStatus === 'caution') {
-      console.log('[CameraScreen] CAUTION status received');
-      // Single soft buzz, repeats every 3s
-      startBuzz([0, 180], 30);
-      void playWarningSound('caution');
-    } else {
-      console.log('[CameraScreen] status does not require buzz', poseStatus);
-      stopBuzz();
-      void stopWarningSound();
-    }
-  }, [poseStatus, isAnalyzing]);
-
   // ── Cleanup on unmount ───────────────────────────────────────────────────────
   useEffect(() => {
     return () => {
       stopBuzz();
       soundModeRef.current = 'off';
-      warningPlayer.pause();
+      try {
+        warningPlayer.pause();
+      } catch {}
     };
   }, [warningPlayer]);
 
@@ -197,6 +169,21 @@ export default function CameraScreen() {
       let nextStatus = 'idle';
       if (payload?.calibrating)  nextStatus = 'calibrating';
       else if (payload?.status)  nextStatus = payload.status;
+
+      if (nextStatus === 'bad') {
+        console.log('[CameraScreen] payload.status is BAD, starting alert');
+        startBuzz([0, 300, 150, 300], 1200);
+        void playWarningSound('bad');
+      } else if (nextStatus === 'caution') {
+        console.log('[CameraScreen] payload.status is CAUTION, starting alert');
+        startBuzz([0, 180], 2200);
+        void playWarningSound('caution');
+      } else {
+        console.log('[CameraScreen] payload.status does not require alert', nextStatus);
+        stopBuzz();
+        void stopWarningSound();
+      }
+
       console.log('[CameraScreen] setting poseStatus', nextStatus);
       setPoseStatus(nextStatus);
     });

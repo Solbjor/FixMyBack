@@ -19,7 +19,6 @@ import logging
 from pose_utils import (
     KEYPOINTS, compute_posture_features,
     PostureMonitor, PostureScoreTracker,
-    KeypointBuffer,
 )
 
 # Configure logging
@@ -32,7 +31,6 @@ logging.basicConfig(
 # ── Load MoveNet Thunder (lazy-loaded) ────────────────────────────
 _movenet_loaded = False
 movenet = None
-_keypoint_smoother = KeypointBuffer(buffer_size=3)  # Smooth over 3 frames
 
 def run_movenet(frame):
     """Run MoveNet on a BGR frame. Returns 17 keypoints as (y, x, conf)."""
@@ -87,13 +85,9 @@ def run_movenet(frame):
         img = tf_module.image.resize_with_pad(tf_module.expand_dims(img, axis=0), 256, 256)
         img = tf_module.cast(img, dtype=tf_module.int32)
         outputs = movenet(img)
-        keypoints = outputs["output_0"].numpy()[0, 0, :, :]  # Format: (17, 3) as (y, x, conf) in 0-256 space
-        # ⚠️ CRITICAL: Normalize from 0-256 pixel space to 0-1 for consistent drawing
-        keypoints[:, :2] = keypoints[:, :2] / 256.0
-    
-    # Apply Kalman smoothing to reduce jitter
-    smoothed_keypoints = _keypoint_smoother.add_keypoints(keypoints)
-    return smoothed_keypoints if smoothed_keypoints is not None else keypoints
+        keypoints = outputs["output_0"].numpy()[0, 0, :, :]  # Already normalized as (y, x, conf)
+
+    return keypoints
 
 
 # ── Drawing helpers ───────────────────────────────────────────────
