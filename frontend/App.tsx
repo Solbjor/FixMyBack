@@ -17,7 +17,7 @@ import HomeScreen from './src/screens/HomeScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import WelcomeScreen from './src/screens/WelcomeScreen';
 
-const DEV_BYPASS_LOGIN = true;
+const DEV_BYPASS_LOGIN = false;
 
 type TabKey = 'home' | 'camera' | 'profile';
 type AppStage = 'login' | 'welcome' | 'app';
@@ -26,6 +26,7 @@ interface Session {
   email: string;
   uid: string;
   idToken: string;
+  displayName: string;
 }
 
 const tabs: Array<{
@@ -120,10 +121,14 @@ export default function App() {
   const [stage, setStage] = useState<AppStage>(DEV_BYPASS_LOGIN ? 'app' : 'login');
   const [session, setSession] = useState<Session | null>(
     DEV_BYPASS_LOGIN
-      ? { email: 'dev@localhost', uid: 'dev-uid', idToken: 'dev-token' }
+      ? {
+          email: 'dev@localhost',
+          uid: 'dev-uid',
+          idToken: 'dev-token',
+          displayName: 'Andrew',
+        }
       : null
   );
-  const [loggedIn, setLoggedIn] = useState(DEV_BYPASS_LOGIN);
 
   const handleTabPress = (tabKey: TabKey) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {
@@ -134,12 +139,13 @@ export default function App() {
 
   const handleLogin = async (email: string, password: string) => {
     const data = await api.login(email,password);
-    setLoggedIn(true);
+    const fallbackName = email.split('@')[0];
 
     setSession({
       email,
       uid: data.uid,
       idToken: data.idToken,
+      displayName: data.displayName ?? fallbackName,
     });
     setStage('welcome');
   };
@@ -155,6 +161,7 @@ export default function App() {
       email: data.email ?? email,
       uid: data.uid,
       idToken: '',
+      displayName,
     });
     setStage('welcome');
   };
@@ -183,16 +190,23 @@ export default function App() {
         {stage === 'welcome' && session && (
           <WelcomeScreen
             email={session.email}
+            displayName={session.displayName}
             onContinue={handleContinue}
             onLogout={handleLogout}
           />
         )}
         {stage === 'app' && (
           <>
-            {activeTab === 'home' && <HomeScreen />}
+            {activeTab === 'home' && (
+              <HomeScreen displayName={session?.displayName} />
+            )}
             {activeTab === 'camera' && <CameraScreen />}
             {activeTab === 'profile' && (
-              <ProfileScreen email={session?.email} onLogout={handleLogout} />
+              <ProfileScreen
+                email={session?.email}
+                displayName={session?.displayName}
+                onLogout={handleLogout}
+              />
             )}
           </>
         )}

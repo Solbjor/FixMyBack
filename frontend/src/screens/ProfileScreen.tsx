@@ -30,6 +30,7 @@ interface ErrorEvent {
 
 interface ProfileScreenProps {
   email?: string;
+  displayName?: string;
   onLogout?: () => void;
 }
 
@@ -316,55 +317,67 @@ function SummaryStats() {
 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
-export default function ProfileScreen({ email, onLogout }: ProfileScreenProps) {
+export default function ProfileScreen({
+  email,
+  displayName,
+  onLogout,
+}: ProfileScreenProps) {
   return (
     <SafeAreaView edges={['top']} style={styles.safe}>
-      <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={styles.container}
-        showsVerticalScrollIndicator={false}
-      >
-        {/* Header */}
-        <Text style={styles.eyebrow}>Profile</Text>
-        <Text style={styles.title}>Your account</Text>
+      <View style={styles.screen}>
+        <View pointerEvents="none" style={styles.orbLayer}>
+          <View style={[styles.orb, styles.orbTopRight]} />
+          <View style={[styles.orb, styles.orbMidLeft]} />
+          <View style={[styles.orb, styles.orbBottomRight]} />
+        </View>
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.container}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Header */}
+          <Text style={styles.eyebrow}>Profile</Text>
+          <Text style={styles.title}>Your account</Text>
+          {displayName ? <Text style={styles.name}>{displayName}</Text> : null}
 
-        {email ? <Text style={styles.meta}>Signed in as {email}</Text> : null}
+          {email ? <Text style={styles.meta}>Signed in as {email}</Text> : null}
 
-        {/* Summary stats */}
-        <SummaryStats />
+          {/* Summary stats */}
+          <SummaryStats />
 
-        {/* Bar chart card */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Weekly posture score</Text>
-          <Text style={styles.cardSubtitle}>Teal = good  ·  Red = needs work</Text>
-          <View style={styles.chartWrap}>
-            <BarChart />
+          {/* Bar chart card */}
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Weekly posture score</Text>
+            <Text style={styles.cardSubtitle}>Teal = good  ·  Red = needs work</Text>
+            <View style={styles.chartWrap}>
+              <BarChart />
+            </View>
           </View>
-        </View>
 
-        {/* Trend line card */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Score trend</Text>
-          <Text style={styles.cardSubtitle}>How your posture has changed this week</Text>
-          <View style={styles.chartWrap}>
-            <TrendLine />
+          {/* Trend line card */}
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Score trend</Text>
+            <Text style={styles.cardSubtitle}>How your posture has changed this week</Text>
+            <View style={styles.chartWrap}>
+              <TrendLine />
+            </View>
           </View>
-        </View>
 
-        {/* Error log card */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Error log</Text>
-          <Text style={styles.cardSubtitle}>Organised by day — most recent first</Text>
-          <ErrorLog />
-        </View>
+          {/* Error log card */}
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Error log</Text>
+            <Text style={styles.cardSubtitle}>Organised by day — most recent first</Text>
+            <ErrorLog />
+          </View>
 
-        {/* Logout */}
-        {onLogout ? (
-          <Pressable onPress={onLogout} style={styles.logoutBtn}>
-            <Text style={styles.logoutText}>Log out</Text>
-          </Pressable>
-        ) : null}
-      </ScrollView>
+          {/* Logout */}
+          {onLogout ? (
+            <Pressable onPress={onLogout} style={styles.logoutBtn}>
+              <Text style={styles.logoutText}>Log out</Text>
+            </Pressable>
+          ) : null}
+        </ScrollView>
+      </View>
     </SafeAreaView>
   );
 }
@@ -375,6 +388,42 @@ const styles = StyleSheet.create({
   safe: {
     flex: 1,
     backgroundColor: colors.bgPage,
+  },
+  screen: {
+    flex: 1,
+    backgroundColor: colors.bgPage,
+  },
+  orbLayer: {
+    ...StyleSheet.absoluteFillObject,
+    overflow: 'hidden',
+  },
+  orb: {
+    position: 'absolute',
+    borderRadius: radius.full,
+  },
+  orbTopRight: {
+    width: 190,
+    height: 190,
+    top: 22,
+    right: -76,
+    backgroundColor: brand.orange,
+    opacity: 0.18,
+  },
+  orbMidLeft: {
+    width: 56,
+    height: 56,
+    top: 220,
+    left: 18,
+    backgroundColor: brand.yellow,
+    opacity: 0.34,
+  },
+  orbBottomRight: {
+    width: 110,
+    height: 110,
+    bottom: 110,
+    right: -36,
+    backgroundColor: brand.teal,
+    opacity: 0.16,
   },
   scroll: {
     flex: 1,
@@ -402,6 +451,12 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     lineHeight: 40,
     marginBottom: 4,
+  },
+  name: {
+    fontSize: fontSize.lg,
+    fontWeight: '600',
+    color: colors.textBody,
+    marginBottom: 6,
   },
   meta: {
     fontSize: fontSize.sm,

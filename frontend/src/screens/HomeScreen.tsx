@@ -8,7 +8,7 @@ import {
   SafeAreaView,
 } from 'react-native';
 import Svg, { Circle, Polyline, Path, Line } from 'react-native-svg';
-import { colors, fontSize, radius } from '../../constants/theme';
+import { brand, colors, fontSize, radius } from '../../constants/theme';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -153,10 +153,19 @@ function ChevronRight() {
 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
-export default function HomeScreen() {
+interface HomeScreenProps {
+  displayName?: string;
+}
+
+export default function HomeScreen({ displayName }: HomeScreenProps) {
   return (
-    <SafeAreaView>
-      <View>
+    <SafeAreaView style={styles.safe}>
+      <View style={styles.screen}>
+        <View pointerEvents="none" style={styles.orbLayer}>
+          <View style={[styles.orb, styles.orbLargeTop]} />
+          <View style={[styles.orb, styles.orbRight]} />
+          <View style={[styles.orb, styles.orbSmallLeft]} />
+        </View>
         <ScrollView
           contentContainerStyle={styles.scroll}
           showsVerticalScrollIndicator={false}
@@ -171,7 +180,7 @@ export default function HomeScreen() {
             <View style={styles.welcomeRow}>
               <View>
                 <Text style={styles.welcomeLabel}>Welcome back</Text>
-                <Text style={styles.welcomeName}>Andrew</Text>
+                <Text style={styles.welcomeName}>{displayName || 'Andrew'}</Text>
               </View>
               <View style={styles.weekBadge}>
                 <Text style={styles.weekBadgeLabel}>WEEK</Text>
@@ -231,6 +240,46 @@ export default function HomeScreen() {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
+  safe: {
+    flex: 1,
+    backgroundColor: colors.bgPage,
+  },
+  screen: {
+    flex: 1,
+    backgroundColor: colors.bgPage,
+  },
+  orbLayer: {
+    ...StyleSheet.absoluteFillObject,
+    overflow: 'hidden',
+  },
+  orb: {
+    position: 'absolute',
+    borderRadius: radius.full,
+  },
+  orbLargeTop: {
+    width: 180,
+    height: 180,
+    top: 36,
+    left: -72,
+    backgroundColor: brand.orange,
+    opacity: 0.18,
+  },
+  orbRight: {
+    width: 152,
+    height: 152,
+    top: 92,
+    right: -62,
+    backgroundColor: brand.yellow,
+    opacity: 0.22,
+  },
+  orbSmallLeft: {
+    width: 42,
+    height: 42,
+    top: 204,
+    left: 30,
+    backgroundColor: brand.teal,
+    opacity: 0.3,
+  },
   scroll: {
     paddingHorizontal: 22,
     paddingTop: 16,
