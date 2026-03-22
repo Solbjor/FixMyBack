@@ -1,33 +1,64 @@
 """
 Posture Detection — Hackathon Starter
 Run with: python main.py
+  or: python main.py --stream --socket http://192.168.1.192:4000
 
-Controls:
+Controls (webcam mode):
   [c] — Start/stop calibration
   [r] — Reset calibration and score
   [q] — Quit (saves posture_report.csv)
+
+Stream mode logs stats to stdout; no keyboard controls.
 """
 
+import sys
+import argparse
 import cv2
 import numpy as np
-import tensorflow as tf
-import tensorflow_hub as hub
+import logging
 from pose_utils import (
     KEYPOINTS, compute_posture_features,
     PostureMonitor, PostureScoreTracker,
 )
 
-# ── Load MoveNet Thunder ──────────────────────────────────────────
-print("Loading MoveNet Thunder... (first run downloads ~30MB)")
-model = hub.load("https://tfhub.dev/google/movenet/singlepose/thunder/4")
-movenet = model.signatures["serving_default"]
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s: %(message)s',
+    datefmt='%H:%M:%S'
+)
 
+# ── Load MoveNet Thunder (lazy-loaded) ────────────────────────────
+_movenet_loaded = False
+movenet = None
 
 def run_movenet(frame):
     """Run MoveNet on a BGR frame. Returns 17 keypoints as (y, x, conf)."""
+    global _movenet_loaded, movenet
+    
+    # Lazy-load on first call
+    if not _movenet_loaded:
+        try:
+            import tensorflow as tf_module
+            import tensorflow_hub as hub_module
+            print("Loading MoveNet Thunder... (first run downloads ~30MB)")
+            model = hub_module.load("https://tfhub.dev/google/movenet/singlepose/thunder/4")
+            movenet = model.signatures["serving_default"]
+            _movenet_loaded = True
+        except ImportError:
+            print("WARNING: TensorFlow not available; using mock inference for testing")
+            _movenet_loaded = True  # Don't retry
+            return np.random.rand(17, 3)  # Mock keypoints
+    
+    if movenet is None:
+        # Mock mode if TensorFlow failed
+        return np.random.rand(17, 3)
+    
+    # Real inference
+    import tensorflow as tf_module
     img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    img = tf.image.resize_with_pad(tf.expand_dims(img, axis=0), 256, 256)
-    img = tf.cast(img, dtype=tf.int32)
+    img = tf_module.image.resize_with_pad(tf_module.expand_dims(img, axis=0), 256, 256)
+    img = tf_module.cast(img, dtype=tf_module.int32)
     outputs = movenet(img)
     return outputs["output_0"].numpy()[0, 0, :, :]
 
@@ -176,7 +207,8 @@ def draw_hud(frame, status, tracker, calibrating, cal_count):
 
 
 # ── Main loop ─────────────────────────────────────────────────────
-def main():
+def main_webcam():
+    """Original mode: read from local webcam, render UI."""
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("ERROR: Cannot open webcam.")
@@ -241,6 +273,116 @@ def main():
     print("=====================================\n")
 
     tracker.save_report("posture_report.csv")
+
+
+def main_stream(socket_url):
+    """Stream mode: read from Socket.IO, no UI, log stats."""
+    from stream_bridge import StreamBridge
+    
+    logger = logging.getLogger(__name__)
+    
+    # Initialize state
+    monitor = PostureMonitor(smoothing_window=12)
+    tracker = PostureScoreTracker(rolling_window=60)
+    calibrating = False
+    status = {"overall": "not_calibrated", "details": {}}
+    
+    # Callback for pose inference results
+    def on_inference(frame, keypoints, features):
+        nonlocal calibrating, status
+        
+        if features is None:
+            return
+        
+        if calibrating:
+            # In calibration mode, accumulate samples
+            monitor.add_calibration_sample(features)
+            logger.info(f"[CAL] Collected {len(monitor.calibration_samples)} samples")
+            
+            # Auto-finish after 30 samples
+            if len(monitor.calibration_samples) >= 30:
+                calibrating = False
+                monitor.finish_calibration()
+                tracker = PostureScoreTracker(rolling_window=60)
+                logger.info("[CAL] Calibration complete. Monitoring started.")
+        else:
+            # Evaluate and score
+            if status["overall"] != "not_calibrated":
+                status = monitor.evaluate(features)
+                tracker.record(status)
+                
+                # Log status changes
+                if status["overall"] in ["caution", "bad"]:
+                    logger.warning(
+                        f"[STATUS] {status['overall'].upper()} — "
+                        f"Bad metrics: {status['metrics_in_alert']} alert, "
+                        f"{status['metrics_in_caution']} caution"
+                    )
+    
+    # Create bridge
+    bridge = StreamBridge(
+        socket_url=socket_url,
+        run_movenet_fn=run_movenet,
+        compute_features_fn=compute_posture_features,
+        post_inference_cb=on_inference
+    )
+    
+    # Connect
+    logger.info(f"Connecting to {socket_url}...")
+    if not bridge.connect():
+        logger.error("Failed to connect. Exiting.")
+        return
+    
+    logger.info("Connected. Starting calibration in 2 seconds...")
+    import time
+    time.sleep(2)
+    calibrating = True
+    
+    logger.info("[CAL] Calibration started. Collecting 30 samples...")
+    
+    # Run processing loop (blocks until stop_requested is set)
+    try:
+        bridge.process_frames()
+    except KeyboardInterrupt:
+        logger.info("Interrupted by user")
+    finally:
+        bridge.stop()
+        
+        # Save summary
+        summary = tracker.get_summary()
+        logger.info("========== SESSION SUMMARY ==========")
+        for k, v in summary.items():
+            logger.info(f"  {k}: {v}")
+        logger.info("=====================================")
+        
+        tracker.save_report("posture_report.csv")
+
+
+def main():
+    """Parse args and run either webcam or stream mode."""
+    parser = argparse.ArgumentParser(
+        description="Posture detection with MoveNet"
+    )
+    parser.add_argument(
+        "--stream",
+        action="store_true",
+        help="Read frames from Socket.IO relay instead of local webcam"
+    )
+    parser.add_argument(
+        "--socket",
+        type=str,
+        default="http://localhost:4000",
+        help="Socket.IO server URL (default: http://localhost:4000)"
+    )
+    
+    args = parser.parse_args()
+    
+    if args.stream:
+        logger = logging.getLogger(__name__)
+        logger.info("Starting in STREAM mode")
+        main_stream(args.socket)
+    else:
+        main_webcam()
 
 
 if __name__ == "__main__":

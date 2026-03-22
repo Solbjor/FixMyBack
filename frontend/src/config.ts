@@ -1,2 +1,4 @@
-// This should be changed to the local IP address of the pc with a webcam
-export const SERVER_URL = 'http://10.118.81.133:4000'
+const HOST = process.env.EXPO_PUBLIC_HOST_IP || '192.168.1.14';
+
+export const BACKEND_URL = `http://${HOST}:3000`;
+export const STREAM_URL = `http://${HOST}:4000`;
