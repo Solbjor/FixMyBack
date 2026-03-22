@@ -19,6 +19,7 @@ import logging
 from pose_utils import (
     KEYPOINTS, compute_posture_features,
     PostureMonitor, PostureScoreTracker,
+    KeypointBuffer,
 )
 
 # Configure logging
@@ -31,6 +32,7 @@ logging.basicConfig(
 # ── Load MoveNet Thunder (lazy-loaded) ────────────────────────────
 _movenet_loaded = False
 movenet = None
+_keypoint_smoother = KeypointBuffer(buffer_size=3)  # Smooth over 3 frames
 
 def run_movenet(frame):
     """Run MoveNet on a BGR frame. Returns 17 keypoints as (y, x, conf)."""
@@ -45,22 +47,53 @@ def run_movenet(frame):
             model = hub_module.load("https://tfhub.dev/google/movenet/singlepose/thunder/4")
             movenet = model.signatures["serving_default"]
             _movenet_loaded = True
-        except ImportError:
-            print("WARNING: TensorFlow not available; using mock inference for testing")
+            print("✅ MoveNet loaded successfully!")
+        except ImportError as e:
+            print(f"❌ WARNING: TensorFlow not available ({e})")
+            print("   Install with: pip install tensorflow tensorflow-hub")
+            print("   Using mock inference for testing instead")
             _movenet_loaded = True  # Don't retry
-            return np.random.rand(17, 3)  # Mock keypoints
+        except Exception as e:
+            print(f"❌ Error loading MoveNet: {type(e).__name__}: {e}")
+            print("   Falling back to mock mode")
+            _movenet_loaded = True
     
     if movenet is None:
-        # Mock mode if TensorFlow failed
-        return np.random.rand(17, 3)
+        # Mock mode: return stable realistic keypoints (not random)
+        # Format: (y, x, confidence) normalized 0-1
+        keypoints = np.array([
+            [0.15, 0.50, 0.9],  # nose
+            [0.12, 0.48, 0.9],  # left_eye
+            [0.12, 0.52, 0.9],  # right_eye
+            [0.14, 0.44, 0.8],  # left_ear
+            [0.14, 0.56, 0.8],  # right_ear
+            [0.30, 0.35, 0.9],  # left_shoulder
+            [0.30, 0.65, 0.9],  # right_shoulder
+            [0.45, 0.25, 0.8],  # left_elbow
+            [0.45, 0.75, 0.8],  # right_elbow
+            [0.55, 0.30, 0.7],  # left_wrist
+            [0.55, 0.70, 0.7],  # right_wrist
+            [0.55, 0.40, 0.9],  # left_hip
+            [0.55, 0.60, 0.9],  # right_hip
+            [0.75, 0.38, 0.8],  # left_knee
+            [0.75, 0.62, 0.8],  # right_knee
+            [0.90, 0.38, 0.7],  # left_ankle
+            [0.90, 0.62, 0.7],  # right_ankle
+        ])
+    else:
+        # Real inference
+        import tensorflow as tf_module
+        img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img = tf_module.image.resize_with_pad(tf_module.expand_dims(img, axis=0), 256, 256)
+        img = tf_module.cast(img, dtype=tf_module.int32)
+        outputs = movenet(img)
+        keypoints = outputs["output_0"].numpy()[0, 0, :, :]  # Format: (17, 3) as (y, x, conf) in 0-256 space
+        # ⚠️ CRITICAL: Normalize from 0-256 pixel space to 0-1 for consistent drawing
+        keypoints[:, :2] = keypoints[:, :2] / 256.0
     
-    # Real inference
-    import tensorflow as tf_module
-    img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    img = tf_module.image.resize_with_pad(tf_module.expand_dims(img, axis=0), 256, 256)
-    img = tf_module.cast(img, dtype=tf_module.int32)
-    outputs = movenet(img)
-    return outputs["output_0"].numpy()[0, 0, :, :]
+    # Apply Kalman smoothing to reduce jitter
+    smoothed_keypoints = _keypoint_smoother.add_keypoints(keypoints)
+    return smoothed_keypoints if smoothed_keypoints is not None else keypoints
 
 
 # ── Drawing helpers ───────────────────────────────────────────────
@@ -76,7 +109,18 @@ SKELETON_EDGES = [
 
 
 def draw_skeleton(frame, keypoints, confidence_thresh=0.3):
+    """Draw pose skeleton on frame. Keypoints should be normalized (0-1)."""
     h, w, _ = frame.shape
+    
+    # Safety check: ensure coordinates are in valid range
+    if len(keypoints) > 0:
+        max_coord = np.max(keypoints[:, :2])
+        if max_coord > 1.1:  # Allow small numerical error
+            print(f"⚠️ WARNING: Keypoint coordinates out of range (max={max_coord:.2f}). "
+                  f"Expected 0-1, got 0-{max_coord:.2f}. Normalizing...")
+            keypoints = keypoints.copy()
+            keypoints[:, :2] = np.clip(keypoints[:, :2] / 256.0, 0, 1)
+    
     for i, (ky, kx, kc) in enumerate(keypoints):
         if kc > confidence_thresh:
             cx, cy = int(kx * w), int(ky * h)
@@ -286,15 +330,24 @@ def main_stream(socket_url):
     tracker = PostureScoreTracker(rolling_window=60)
     calibrating = False
     status = {"overall": "not_calibrated", "details": {}}
+    bridge = None
+
+    def serialize_status_details(details):
+        serialized = {}
+        for metric_name, metric_info in details.items():
+            serialized[metric_name] = {
+                key: float(value) if isinstance(value, (int, float, np.floating, np.integer)) else value
+                for key, value in metric_info.items()
+            }
+        return serialized
     
     # Callback for pose inference results
     def on_inference(frame, keypoints, features):
-        nonlocal calibrating, status
-        
+        nonlocal bridge, calibrating, status, tracker
+
         if features is None:
-            return
-        
-        if calibrating:
+            status = {"overall": "no_pose", "details": {}}
+        elif calibrating:
             # In calibration mode, accumulate samples
             monitor.add_calibration_sample(features)
             logger.info(f"[CAL] Collected {len(monitor.calibration_samples)} samples")
@@ -304,20 +357,43 @@ def main_stream(socket_url):
                 calibrating = False
                 monitor.finish_calibration()
                 tracker = PostureScoreTracker(rolling_window=60)
+                status = monitor.evaluate(features)
                 logger.info("[CAL] Calibration complete. Monitoring started.")
         else:
             # Evaluate and score
-            if status["overall"] != "not_calibrated":
-                status = monitor.evaluate(features)
-                tracker.record(status)
-                
-                # Log status changes
-                if status["overall"] in ["caution", "bad"]:
-                    logger.warning(
-                        f"[STATUS] {status['overall'].upper()} — "
-                        f"Bad metrics: {status['metrics_in_alert']} alert, "
-                        f"{status['metrics_in_caution']} caution"
-                    )
+            status = monitor.evaluate(features)
+            tracker.record(status)
+
+            if status["overall"] in ["caution", "bad"]:
+                logger.warning(
+                    f"[STATUS] {status['overall'].upper()} — "
+                    f"Bad metrics: {status['metrics_in_alert']} alert, "
+                    f"{status['metrics_in_caution']} caution"
+                )
+
+        if bridge is not None:
+            bridge.emit_posture_update({
+                "keypoints": [
+                    {
+                        "name": name,
+                        "y": float(keypoints[index][0]),
+                        "x": float(keypoints[index][1]),
+                        "confidence": float(keypoints[index][2]),
+                    }
+                    for name, index in KEYPOINTS.items()
+                ],
+                "status": status["overall"],
+                "details": serialize_status_details(status.get("details", {})),
+                "tracker": {
+                    "overall_score": float(tracker.overall_score),
+                    "rolling_score": float(tracker.rolling_score),
+                    "streak_seconds": float(tracker.streak_seconds),
+                    "streak_state": tracker.streak_state,
+                    "session_duration": float(tracker.session_duration),
+                    "worst_metric": tracker.worst_metric,
+                },
+                "calibrating": calibrating,
+            })
     
     # Create bridge
     bridge = StreamBridge(
@@ -337,9 +413,8 @@ def main_stream(socket_url):
     import time
     time.sleep(2)
     calibrating = True
-    
     logger.info("[CAL] Calibration started. Collecting 30 samples...")
-    
+
     # Run processing loop (blocks until stop_requested is set)
     try:
         bridge.process_frames()

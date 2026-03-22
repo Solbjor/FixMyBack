@@ -102,7 +102,17 @@ class StreamBridge:
             logger.error(f"Failed to connect: {e}")
             return False
         return True
-    
+
+    def emit_posture_update(self, data):
+        """Broadcast posture inference results to other Socket.IO clients."""
+        if not self.sio.connected:
+            return
+
+        try:
+            self.sio.emit('posture-data', data)
+        except Exception as e:
+            logger.warning(f"Failed to emit posture update: {e}")
+
     def _decode_frame(self, data_url: str) -> np.ndarray:
         """
         Decode base64 JPEG data URL to BGR numpy array.

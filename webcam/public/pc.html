@@ -6,8 +6,9 @@
   <style>
     body { margin: 0; background: #111; color: white; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; }
     .feed { position: relative; width: 640px; height: 480px; }
-    video { width: 100%; height: 100%; }
-    canvas { display: none; }
+    video { width: 100%; height: 100%; position: absolute; inset: 0; }
+    #capture-canvas { display: none; }
+    #overlay { width: 100%; height: 100%; position: absolute; inset: 0; pointer-events: none; }
     .status { 
       margin-top: 20px; 
       padding: 15px 20px; 
@@ -39,31 +40,92 @@
       font-size: 14px; 
       color: #aaa;
     }
+    .debug {
+      display: block;
+      margin-top: 8px;
+      font-size: 13px;
+      color: #93c5fd;
+    }
   </style>
 </head>
 <body>
   <h2>FixMyBack - PC Camera Feed</h2>
   <div class="feed">
     <video id="video" autoplay playsinline></video>
-    <canvas id="canvas" width="640" height="480" style="display:none;"></canvas>
+    <canvas id="overlay" width="640" height="480"></canvas>
+    <canvas id="capture-canvas" width="640" height="480" style="display:none;"></canvas>
   </div>
   
   <div class="status" id="status">
     <div><span class="indicator"></span><span id="status-text">Initializing...</span></div>
     <span class="frame-count">Frames sent: <strong id="frame-count">0</strong></span>
+    <span class="debug">Posture updates: <strong id="pose-count">0</strong></span>
   </div>
 
   <script src="/socket.io/socket.io.js"></script>
   <script>
     const socket = io();
     const video = document.getElementById('video');
-    const canvas = document.getElementById('canvas');
+    const canvas = document.getElementById('capture-canvas');
     const ctx = canvas.getContext('2d');
+    const overlay = document.getElementById('overlay');
+    const overlayCtx = overlay.getContext('2d');
     const statusEl = document.getElementById('status');
     const statusText = document.getElementById('status-text');
     const frameCountEl = document.getElementById('frame-count');
+    const poseCountEl = document.getElementById('pose-count');
     
     let frameCount = 0;
+    let poseCount = 0;
+    let latestPose = null;
+    const skeletonEdges = [
+      ['left_ear', 'left_eye'], ['right_ear', 'right_eye'],
+      ['left_eye', 'nose'], ['right_eye', 'nose'],
+      ['left_shoulder', 'right_shoulder'],
+      ['left_shoulder', 'left_elbow'], ['right_shoulder', 'right_elbow'],
+      ['left_elbow', 'left_wrist'], ['right_elbow', 'right_wrist'],
+      ['left_shoulder', 'left_hip'], ['right_shoulder', 'right_hip'],
+      ['left_hip', 'right_hip'],
+    ];
+
+    function poseColor(status) {
+      if (status === 'good') return '#2dd4bf';
+      if (status === 'caution') return '#f59e0b';
+      if (status === 'bad') return '#ef4444';
+      return '#f8fafc';
+    }
+
+    function drawPose() {
+      overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
+
+      if (!latestPose || !latestPose.keypoints) return;
+
+      const keypointMap = {};
+      latestPose.keypoints.forEach((point) => {
+        keypointMap[point.name] = point;
+      });
+
+      overlayCtx.lineWidth = 3;
+      overlayCtx.strokeStyle = poseColor(latestPose.status);
+
+      skeletonEdges.forEach(([from, to]) => {
+        const p1 = keypointMap[from];
+        const p2 = keypointMap[to];
+        if (!p1 || !p2 || p1.confidence < 0.3 || p2.confidence < 0.3) return;
+        overlayCtx.beginPath();
+        overlayCtx.moveTo(p1.x * overlay.width, p1.y * overlay.height);
+        overlayCtx.lineTo(p2.x * overlay.width, p2.y * overlay.height);
+        overlayCtx.stroke();
+      });
+
+      latestPose.keypoints.forEach((point) => {
+        if (point.confidence < 0.3) return;
+        overlayCtx.beginPath();
+        overlayCtx.fillStyle = '#fde047';
+        overlayCtx.arc(point.x * overlay.width, point.y * overlay.height, 5, 0, Math.PI * 2);
+        overlayCtx.fill();
+      });
+    }
 
     socket.on('connect', () => {
       statusEl.classList.add('connected');
@@ -75,6 +137,17 @@
       statusEl.classList.remove('connected');
       statusText.textContent = '✗ Disconnected from relay';
       console.log('[PC] Disconnected from relay');
+    });
+
+    socket.on('posture-update', (payload) => {
+      latestPose = payload;
+      poseCount++;
+      poseCountEl.textContent = poseCount;
+      console.log('[PC] posture-update', payload);
+      statusText.textContent = payload.calibrating
+        ? 'Calibrating posture model'
+        : ('AI status: ' + (payload.status || 'waiting'));
+      drawPose();
     });
 
     navigator.mediaDevices.getUserMedia({ video: true })

@@ -1,6 +1,9 @@
-tensorflow>=2.10.0
-tensorflow-hub>=0.13.0
-opencv-python>=4.7.0
-numpy>=1.23.0
-python-socketio>=5.9.0
-python-engineio>=4.7.0
+setuptools<81
+numpy==1.26.4
+tensorflow-macos==2.16.2; platform_system == "Darwin" and platform_machine == "arm64"
+tensorflow==2.16.2; platform_system != "Darwin" or platform_machine != "arm64"
+tensorflow-hub==0.16.1
+opencv-python==4.10.0.84
+python-socketio==5.11.4
+python-engineio==4.9.1
+websocket-client>=1.8.0

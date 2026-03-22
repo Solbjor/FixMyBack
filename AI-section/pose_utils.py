@@ -17,8 +17,84 @@ KEYPOINTS = {
 CONFIDENCE_THRESHOLD = 0.3
 
 
+class KeypointSmoother:
+    """Kalman-filter-based smoothing for pose keypoints to reduce jitter."""
+    
+    def __init__(self, process_variance=0.01, measurement_variance=0.1):
+        """
+        Args:
+            process_variance: How much we expect the true value to change per frame
+            measurement_variance: How much we trust the measurement (lower = more trust)
+        """
+        self.process_variance = process_variance
+        self.measurement_variance = measurement_variance
+        self.estimate = None
+        self.estimate_error = 1.0
+        
+    def update(self, measurement):
+        """Apply Kalman filter to smooth a measurement."""
+        if measurement is None:
+            return self.estimate
+        
+        if self.estimate is None:
+            # First measurement: initialize
+            self.estimate = measurement
+            return self.estimate
+        
+        # Predict step
+        prediction = self.estimate
+        prediction_error = self.estimate_error + self.process_variance
+        
+        # Update step
+        kalman_gain = prediction_error / (prediction_error + self.measurement_variance)
+        self.estimate = prediction + kalman_gain * (measurement - prediction)
+        self.estimate_error = (1 - kalman_gain) * prediction_error
+        
+        return self.estimate
+
+
+class KeypointBuffer:
+    """Buffer and smooth keypoints from multiple frames."""
+    
+    def __init__(self, buffer_size=3):
+        """
+        Args:
+            buffer_size: Number of frames to use for smoothing (3-5 is typical)
+        """
+        self.buffer_size = buffer_size
+        self.buffer = deque(maxlen=buffer_size)
+        self.smoothers = None
+        
+    def add_keypoints(self, keypoints):
+        """Add keypoints and return smoothed keypoints."""
+        if keypoints is None:
+            return None
+        
+        # Initialize smoothers on first call
+        if self.smoothers is None:
+            self.smoothers = [KeypointSmoother() for _ in range(17)]
+        
+        # Smooth each keypoint coordinate
+        smoothed = np.zeros_like(keypoints)
+        for i in range(17):
+            y, x, conf = keypoints[i]
+            
+            # Smooth x and y separately
+            smoothed_x = self.smoothers[i].update(x) if conf > CONFIDENCE_THRESHOLD else x
+            smoothed_y = self.smoothers[i].update(y) if conf > CONFIDENCE_THRESHOLD else y
+            
+            smoothed[i] = [smoothed_y, smoothed_x, conf]
+        
+        self.buffer.append(smoothed)
+        
+        # Return average of buffered keypoints
+        if len(self.buffer) > 0:
+            return np.mean(list(self.buffer), axis=0)
+        return smoothed
+
+
+
 def get_point(keypoints, name):
-    """Extract (x, y, confidence) for a named keypoint."""
     idx = KEYPOINTS[name]
     y, x, conf = keypoints[idx]
     return np.array([x, y]), conf
@@ -29,7 +105,7 @@ def midpoint(p1, p2):
 
 
 def angle_with_horizontal(p1, p2):
-    """Angle in degrees of the line p1->p2 relative to horizontal."""
+    # Angle in degrees of the line p1->p2 relative to horizontal.
     delta = p2 - p1
     return np.degrees(np.arctan2(delta[1], delta[0]))
 
@@ -39,17 +115,7 @@ def euclidean(p1, p2):
 
 
 def compute_posture_features(keypoints):
-    """
-    Compute upper-body posture features from MoveNet keypoints.
-    Returns a dict of features, or None if key points aren't visible.
 
-    Features (all using upper body only — no hips needed):
-      - shoulder_width:    pixel dist between shoulders (proximity proxy)
-      - shoulder_tilt:     angle of shoulder line vs horizontal (lateral lean)
-      - head_drop_ratio:   vertical nose-to-shoulder-midpoint / shoulder_width
-      - forward_head_ratio: horizontal ear-midpoint-to-shoulder-midpoint / shoulder_width
-      - head_tilt:         angle of ear line vs horizontal
-    """
     l_sh, l_sh_c = get_point(keypoints, "left_shoulder")
     r_sh, r_sh_c = get_point(keypoints, "right_shoulder")
     nose, nose_c = get_point(keypoints, "nose")
@@ -68,15 +134,15 @@ def compute_posture_features(keypoints):
     if sh_width < 1e-5:
         return None  # degenerate, shoulders overlapping
 
-    # 1. Shoulder tilt (degrees from horizontal, ~0 is level)
+    # 1. Shoulder tilt 0 is level
     shoulder_tilt = angle_with_horizontal(l_sh, r_sh)
 
-    # 2. Head drop ratio (vertical distance nose -> shoulder midpoint, normalized)
-    #    Positive = nose above shoulders. Gets smaller as you slouch.
+    # 2. Head drop ratio
+    # Positive = nose above shoulders gets smaller as you slouch.
     head_drop_ratio = (sh_mid[1] - nose[1]) / sh_width
 
-    # 3. Forward head ratio (uses ears if available, falls back to nose)
-    #    Measures how far forward the head is relative to shoulder line.
+    # 3. Forward head ratio
+    # Measures how far forward the head is relative to shoulder line.
     if l_ear_c > CONFIDENCE_THRESHOLD and r_ear_c > CONFIDENCE_THRESHOLD:
         ear_mid = midpoint(l_ear, r_ear)
         forward_head_ratio = (ear_mid[1] - sh_mid[1]) / sh_width
@@ -88,11 +154,8 @@ def compute_posture_features(keypoints):
         forward_head_ratio = (r_ear[1] - sh_mid[1]) / sh_width
         head_tilt = 0.0
     else:
-        # No ears visible, use nose vertical position as fallback
         forward_head_ratio = (nose[1] - sh_mid[1]) / sh_width
         head_tilt = 0.0
-
-    # 4. Shoulder width raw (proxy for distance to screen)
     return {
         "shoulder_width": sh_width,
         "shoulder_tilt": shoulder_tilt,
@@ -103,28 +166,12 @@ def compute_posture_features(keypoints):
 
 
 class PostureMonitor:
-    """
-    Handles baseline calibration, smoothing, and deviation detection.
-
-    Usage:
-        monitor = PostureMonitor()
-
-        # During calibration phase, call repeatedly:
-        monitor.add_calibration_sample(features)
-
-        # When ready:
-        monitor.finish_calibration()
-
-        # During monitoring phase:
-        status = monitor.evaluate(features)
-        # status = {"overall": "good"/"bad", "details": {...}}
-    """
 
     def __init__(self, smoothing_window=12):
         self.smoothing_window = smoothing_window
         self.calibration_samples = []
         self.baseline = None
-        self.baseline_variance = None  # Track natural variation during calibration
+        self.baseline_variance = None
         self.history = deque(maxlen=smoothing_window)
 
         # Flexible multi-tier thresholds for each metric
@@ -163,7 +210,6 @@ class PostureMonitor:
         self.thresholds = {}
         for k, multipliers in self.threshold_multipliers.items():
             variance = self.baseline_variance[k]
-            # Use max of: (multiplier * observed_variance) or a reasonable minimum
             # This adapts to how much natural movement happens during calibration
             min_threshold = {
                 "shoulder_width": 0.08,
@@ -202,15 +248,6 @@ class PostureMonitor:
         return smoothed
 
     def evaluate(self, features):
-        """
-        Compare current (smoothed) features against baseline.
-        Returns dict with overall status and per-metric details.
-        
-        Uses tiered thresholds:
-          - "good": all deviations below warning threshold
-          - "caution": some deviations above warning but below alert threshold
-          - "bad": any deviation exceeds alert threshold
-        """
         if self.baseline is None:
             return {"overall": "not_calibrated", "details": {}}
         if features is None:
@@ -273,17 +310,6 @@ class PostureMonitor:
 
 
 class PostureScoreTracker:
-    """
-    Tracks posture quality over an entire session.
-
-    Records every evaluation with a timestamp, then computes:
-      - overall_score:  % of session spent in good posture
-      - rolling_score:  % of the last `rolling_window` seconds in good posture
-      - streak:         how many consecutive seconds in current state
-      - worst_metric:   which metric triggered "bad" most often
-
-    Call save_report() at the end to dump a CSV timeline.
-    """
 
     def __init__(self, rolling_window=60):
         self.rolling_window = rolling_window  # seconds
@@ -295,7 +321,6 @@ class PostureScoreTracker:
         self.metric_caution_counts = {}  # tracks "caution" level issues
 
     def record(self, status):
-        """Call this every frame with the output of PostureMonitor.evaluate()."""
         if status["overall"] in ("not_calibrated", "no_pose"):
             return
 
@@ -322,11 +347,6 @@ class PostureScoreTracker:
 
     @property
     def overall_score(self):
-        """
-        Percentage of total recorded frames that were 'good'.
-        Caution frames count as 50% credit.
-        Bad frames count as 0%.
-        """
         if not self.records:
             return 0.0
         good = sum(1 for _, s, _ in self.records if s == "good")
@@ -336,10 +356,6 @@ class PostureScoreTracker:
 
     @property
     def rolling_score(self):
-        """
-        Percentage of frames in the last `rolling_window` seconds that were 'good'.
-        Caution frames count as 50% credit.
-        """
         if not self.records:
             return 0.0
         cutoff = time.time() - self.rolling_window
@@ -353,21 +369,18 @@ class PostureScoreTracker:
 
     @property
     def streak_seconds(self):
-        """How many seconds the user has been in their current state."""
         if self.streak_start is None:
             return 0.0
         return time.time() - self.streak_start
 
     @property
     def session_duration(self):
-        """Total session length in seconds."""
         if self.session_start is None:
             return 0.0
         return time.time() - self.session_start
 
     @property
     def worst_metric(self):
-        """The metric that triggered issues (alert or caution) most often, or None."""
         # Combine alert and caution counts (alert counts double)
         combined_counts = {}
         for name, count in self.metric_alert_counts.items():
@@ -380,7 +393,6 @@ class PostureScoreTracker:
         return max(combined_counts, key=combined_counts.get)
 
     def get_summary(self):
-        """Return a printable session summary dict."""
         duration = self.session_duration
         mins, secs = divmod(int(duration), 60)
         return {
@@ -394,7 +406,6 @@ class PostureScoreTracker:
         }
 
     def save_report(self, filepath="posture_report.csv"):
-        """Save a timestamped CSV of the session for later analysis."""
         if not self.records:
             print("No data to save.")
             return
