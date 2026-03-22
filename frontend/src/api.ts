@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // if we are deploying, this should be the deployment address
-const BACKEND_URL = 'http://192.168.1.192:3000';
+const BACKEND_URL = 'http://10.118.81.133:3000';
 
 async function getToken(): Promise<string | null>{
     return await AsyncStorage.getItem('idToken');

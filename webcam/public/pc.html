@@ -23,15 +23,17 @@
     const ctx = canvas.getContext('2d');
 
     navigator.mediaDevices.getUserMedia({ video: true })
-      .then(stream => video.srcObject = stream)
+      .then(stream => {
+        video.srcObject = stream;
+        video.onloadedmetadata = () => {
+          setInterval(() => {
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const frameData = canvas.toDataURL('image/jpeg', 0.4);
+            socket.emit('frame', frameData);
+          }, 100);
+        };
+      })
       .catch(err => console.error('Camera error:', err));
-
-
-    setInterval(() => {
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const frameData = canvas.toDataURL('image/jpeg', 0.4);
-      socket.emit('frame', frameData);
-    }, 100);
   </script>
 </body>
 </html>

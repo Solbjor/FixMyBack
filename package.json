@@ -4,6 +4,9 @@
   "description": "��#\u0000 \u0000s\u0000a\u0000n\u0000d\u0000b\u0000o\u0000x\u0000-\u0000h\u0000t\u0000m\u0000l\u0000\r\u0000 \u0000",
   "main": "index.js",
   "scripts": {
+    "start": "npm --prefix frontend start",
+    "dev": "npm --prefix backend run dev",
+    "webcam": "node webcam/server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -19,6 +22,7 @@
   },
   "homepage": "https://github.com/OzcarC/sandbox-html#readme",
   "dependencies": {
+    "expo": "^55.0.8",
     "express": "^5.2.1",
     "socket.io": "^4.8.3"
   }

@@ -1,10 +1,8 @@
 import { StyleSheet, Text, View, Dimensions } from 'react-native';
 import { useState, useEffect, useRef } from 'react';
-import { io } from 'socket.io-client';
+import { io, Socket } from 'socket.io-client';
 import { WebView } from 'react-native-webview';
 import { SERVER_URL } from '../config';
-
-const socket = io(SERVER_URL);
 
 const feedHtml = `
   <!DOCTYPE html>
@@ -28,6 +26,8 @@ export default function CameraScreen() {
   const screenWidth = Dimensions.get('window').width;
 
   useEffect(() => {
+    const socket: Socket = io(SERVER_URL);
+
     socket.on('connect', () => setConnected(true));
     socket.on('disconnect', () => setConnected(false));
 
@@ -38,9 +38,7 @@ export default function CameraScreen() {
     });
 
     return () => {
-      socket.off('connect');
-      socket.off('disconnect');
-      socket.off('frame');
+      socket.disconnect();
     };
   }, []);
 
