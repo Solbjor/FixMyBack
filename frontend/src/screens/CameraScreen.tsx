@@ -1,8 +1,11 @@
-import { StyleSheet, Text, View, Dimensions } from 'react-native';
+import * as Haptics from 'expo-haptics';
+import { StyleSheet, Text, View, Dimensions, Pressable } from 'react-native';
 import { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { WebView } from 'react-native-webview';
+import { api } from '../api';
 import { SERVER_URL } from '../config';
+import { colors, fontSize, radius, brand } from '../../constants/theme';
 
 const feedHtml = `
   <!DOCTYPE html>
@@ -31,13 +34,10 @@ const feedHtml = `
           img.src = dataUrl;
           const status = document.getElementById('status');
           status.textContent = '✓ Frame ' + frameCount + ' loaded';
-          console.log('Frame set:', frameCount, dataUrl.substring(0, 50) + '...');
         } catch (e) {
           document.getElementById('status').textContent = 'Error: ' + e.message;
-          console.error('Error setting frame:', e);
         }
       };
-      console.log('setFrame function ready');
     </script>
   </body>
   </html>
@@ -45,69 +45,152 @@ const feedHtml = `
 
 export default function CameraScreen() {
   const [connected, setConnected] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionError, setSessionError] = useState<string | null>(null);
   const webViewRef = useRef<WebView>(null);
   const socketRef = useRef<any>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const screenWidth = Dimensions.get('window').width;
 
+  const formatElapsed = (totalSeconds: number) => {
+    const h = String(Math.floor(totalSeconds / 3600)).padStart(2, '0');
+    const m = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, '0');
+    const s = String(totalSeconds % 60).padStart(2, '0');
+    return `${h}:${m}:${s}`;
+  };
+
   useEffect(() => {
-    // Create socket connection inside useEffect
     socketRef.current = io(SERVER_URL);
-
-    socketRef.current.on('connect', () => {
-      console.log('[CameraScreen] Connected to relay');
-      setConnected(true);
-    });
-
-    socketRef.current.on('disconnect', () => {
-      console.log('[CameraScreen] Disconnected from relay');
-      setConnected(false);
-    });
-
+    socketRef.current.on('connect',    () => setConnected(true));
+    socketRef.current.on('disconnect', () => setConnected(false));
     socketRef.current.on('frame', (data: string) => {
-      // Proper escaping for WebView injection
       const escapedData = data.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-      const js = `window.setFrame('${escapedData}'); true;`;
-      console.log('[CameraScreen] Injecting frame, size:', data.length);
-      webViewRef.current?.injectJavaScript(js);
+      webViewRef.current?.injectJavaScript(`window.setFrame('${escapedData}'); true;`);
     });
-
-    socketRef.current.on('error', (error: any) => {
-      console.log('[CameraScreen] Socket error:', error);
-    });
-
     return () => {
-      if (socketRef.current) {
-        socketRef.current.disconnect();
-      }
+      if (timerRef.current) clearInterval(timerRef.current);
+      socketRef.current?.disconnect();
     };
   }, []);
 
+  const handleAiToggle = async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+
+    if (isAnalyzing) {
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+      try {
+        if (sessionId) await api.endSession(sessionId);
+      } catch (error) {
+        setSessionError(error instanceof Error ? error.message : 'Unable to end session.');
+      } finally {
+        setIsAnalyzing(false);
+        setSessionId(null);
+      }
+      return;
+    }
+
+    try {
+      setSessionError(null);
+      const session = await api.startSession();
+      setSessionId(session.sessionId ?? session.id ?? null);
+      setElapsedSeconds(0);
+      setIsAnalyzing(true);
+      timerRef.current = setInterval(() => setElapsedSeconds((c) => c + 1), 1000);
+    } catch (error) {
+      setSessionError(error instanceof Error ? error.message : 'Unable to start session.');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+    }
+  };
+
   return (
     <View style={styles.container}>
-      <View style={styles.previewCard}>
-        <View style={styles.cardHeader}>
-          <Text style={styles.eyebrow}>Camera</Text>
-          <Text style={[styles.connectionBadge, {color:connected ? '#22c55e' : "#ef4444" }]}>
-            {connected ? 'Connected' : 'Disconnected'}
-          </Text>
-        </View>
-        <Text style={styles.title}>Scan posture</Text>
-        <View style={[styles.feedContainer, { height: (screenWidth - 48) * 0.75 }]}>
-          <WebView
-            ref={webViewRef}
-            source={{html:feedHtml}}
-            style={{flex : 1}}
-            scrollEnabled={false}
-            javaScriptEnabled={true}
-            onMessage={(event) => console.log('[WebView Message]', event.nativeEvent.data)}
-            onError={(error) => console.log('[WebView Error]', error)}
-          />
+      <View style={styles.centerColumn}>
+        <View style={styles.previewCard}>
+          <View style={styles.cardHeader}>
+            <Text style={styles.eyebrow}>Camera</Text>
+            <View
+              style={[
+                styles.connectionPill,
+                { backgroundColor: connected ? '#dcfce7' : '#fee2e2' },
+              ]}
+            >
+              <View
+                style={[
+                  styles.connectionDot,
+                  { backgroundColor: connected ? brand.green : brand.red },
+                ]}
+              />
+              <Text
+                style={[
+                  styles.connectionText,
+                  { color: connected ? '#166534' : '#991b1b' },
+                ]}
+              >
+                {connected ? 'Connected' : 'Disconnected'}
+              </Text>
+            </View>
+          </View>
+
+          <Text style={styles.title}>Scan posture</Text>
+
+          <View
+            style={[styles.feedContainer, { height: (screenWidth - 48) * 0.75 }]}
+          >
+            <WebView
+              ref={webViewRef}
+              source={{ html: feedHtml }}
+              style={{ flex: 1 }}
+              scrollEnabled={false}
+              javaScriptEnabled={true}
+              onMessage={(e) => console.log('[WebView]', e.nativeEvent.data)}
+              onError={(e) => console.log('[WebView Error]', e)}
+            />
+          </View>
         </View>
 
-        <Text style={styles.body}>
-          Use this center tab for posture photos, movement capture, or guided
-          assessments.
-        </Text>
+        <View style={styles.controls}>
+          <Text style={[styles.timerText, isAnalyzing && styles.timerActive]}>
+            {formatElapsed(elapsedSeconds)}
+          </Text>
+
+          <View style={styles.shutterStack}>
+            <Pressable
+              onPress={handleAiToggle}
+              style={({ pressed }) => [
+                styles.shutterOuter,
+                isAnalyzing && styles.shutterOuterActive,
+                pressed && styles.shutterPressed,
+              ]}
+            >
+              <View
+                style={[
+                  styles.shutterRing,
+                  isAnalyzing && styles.shutterRingActive,
+                ]}
+              >
+                <View
+                  style={[
+                    styles.shutterInner,
+                    isAnalyzing && styles.shutterInnerActive,
+                  ]}
+                />
+              </View>
+            </Pressable>
+
+            <Text style={styles.aiButtonLabel}>
+              {isAnalyzing ? 'Tap to stop' : 'Tap to start'}
+            </Text>
+          </View>
+
+          {isAnalyzing && (
+            <View style={styles.analyzingBadge}>
+              <View style={styles.analyzingDot} />
+              <Text style={styles.analyzingText}>AI posture scan running</Text>
+            </View>
+          )}
+        </View>
       </View>
     </View>
   );
@@ -116,51 +199,171 @@ export default function CameraScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 24,
+    paddingHorizontal: 22,
+    gap: 20,
   },
+  centerColumn: {
+    alignItems: 'center',
+    alignSelf: 'center',
+    maxWidth: 390,
+    width: '100%',
+  },
+
+  // ── Card ──
   previewCard: {
-    backgroundColor: '#ffffff',
-    borderColor: '#ddd6c8',
-    borderRadius: 28,
+    backgroundColor: colors.bgCard,
+    borderColor: colors.borderLight,
+    borderRadius: radius.lg,
     borderWidth: 1,
-    padding: 24,
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.08,
+    padding: 22,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.07,
     shadowRadius: 18,
+    elevation: 4,
+    width: '100%',
   },
   cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 10,
+    marginBottom: 6,
   },
   eyebrow: {
-    color: '#7a7466',
-    fontSize: 15,
-    marginBottom: 10,
+    fontSize: fontSize.base,
+    fontWeight: '500',
+    color: colors.textMuted,
     textTransform: 'uppercase',
+    letterSpacing: 1,
   },
-  connectionBadge: {
-    fontSize: 13,
+  connectionPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: radius.full,
+  },
+  connectionDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  connectionText: {
+    fontSize: fontSize.xs,
     fontWeight: '600',
   },
   title: {
-    color: '#111111',
-    fontSize: 34,
+    fontSize: fontSize['3xl'],
     fontWeight: '700',
-    marginBottom: 12,
+    color: colors.textPrimary,
+    marginBottom: 14,
+    lineHeight: 40,
   },
   feedContainer: {
-    borderRadius: 16,
+    borderRadius: radius.sm,
     overflow: 'hidden',
-    backgroundColor: '#222',
-    marginBottom: 16,
+    backgroundColor: '#1a1a1a',
   },
-  body: {
-    color: '#3f3a31',
-    fontSize: 17,
-    lineHeight: 26,
+
+  // ── Controls ──
+  controls: {
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 18,
+  },
+  timerText: {
+    fontSize: fontSize['2xl'],
+    fontWeight: '600',
+    color: colors.textMuted,
+    fontVariant: ['tabular-nums'],
+    letterSpacing: 1,
+  },
+  timerActive: {
+    color: colors.textPrimary,
+  },
+
+  shutterStack: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  aiButtonLabel: {
+    fontSize: fontSize.sm,
+    fontWeight: '500',
+    color: colors.textMuted,
+    textAlign: 'center',
+  },
+
+  // ── Shutter button — light outer, white inner ──
+  shutterOuter: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#f4f0e8',
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    elevation: 6,
+  },
+  shutterOuterActive: {
+    backgroundColor: '#fff3f0',
+    borderColor: '#f1b2a7',
+  },
+  shutterRing: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    borderWidth: 2,
+    borderColor: '#d7d0c3',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  shutterRingActive: {
+    borderColor: '#d94040',
+  },
+  shutterInner: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#ffffff',   // white circle inside
+  },
+  shutterInnerActive: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,              // becomes a rounded square when recording (stop icon)
+    backgroundColor: '#ffffff',
+  },
+  shutterPressed: {
+    transform: [{ scale: 0.94 }],
+  },
+
+  // Analyzing badge
+  analyzingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#fdecea',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: radius.full,
+  },
+  analyzingDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: brand.red,
+  },
+  analyzingText: {
+    fontSize: fontSize.xs,
+    fontWeight: '600',
+    color: brand.red,
   },
 });

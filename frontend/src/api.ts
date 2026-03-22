@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { SERVER_URL } from './config';
 
-// if we are deploying, this should be the deployment address
-const BACKEND_URL = 'http://192.168.1.192:3000';
+const BACKEND_URL = SERVER_URL;
 
 async function getToken(): Promise<string | null>{
     return await AsyncStorage.getItem('idToken');
@@ -23,8 +23,22 @@ async function request(method: string, path: string, body?: object){
     console.log('response status:', res.status);
     console.log('response body:', text);
 
-    const data = JSON.parse(text);
-    if (!res.ok) throw new Error(data.error ?? 'Request failed');
+    let data: any = null;
+
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      if (!res.ok) {
+        throw new Error(
+          `Server returned ${res.status} ${res.statusText}. ` +
+            `Expected JSON but got a non-JSON response.`,
+        );
+      }
+
+      throw new Error('Server returned an invalid JSON response.');
+    }
+
+    if (!res.ok) throw new Error(data?.error ?? 'Request failed');
     return data;
 }
 
