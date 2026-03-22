@@ -62,6 +62,14 @@
     <span class="debug">Posture updates: <strong id="pose-count">0</strong></span>
   </div>
 
+  <div class="calibration-status" id="calib-status">
+    🔄 Calibrating baseline... <span id="calib-countdown">10</span>s
+  </div>
+
+  <div class="controls">
+    <button class="btn-calibrate" id="calibrate-btn" disabled>📷 Start Calibration</button>
+  </div>
+
   <script src="/socket.io/socket.io.js"></script>
   <script>
     const socket = io();

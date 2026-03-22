@@ -15,6 +15,7 @@ import LoginScreen from './src/screens/LoginScreen';
 import CameraScreen from './src/screens/CameraScreen';
 import HomeScreen from './src/screens/HomeScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
+import StretchScreen from './src/screens/StretchScreen';
 import WelcomeScreen from './src/screens/WelcomeScreen';
 
 const DEV_BYPASS_LOGIN = false;
@@ -119,6 +120,7 @@ function TabButton({
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabKey>('camera');
   const [stage, setStage] = useState<AppStage>(DEV_BYPASS_LOGIN ? 'app' : 'login');
+  const [showStretches, setShowStretches] = useState(false);
   const [session, setSession] = useState<Session | null>(
     DEV_BYPASS_LOGIN
       ? {
@@ -195,11 +197,12 @@ export default function App() {
             onLogout={handleLogout}
           />
         )}
-        {stage === 'app' && (
+        {stage === 'app' && showStretches && (
+          <StretchScreen onBack={() => setShowStretches(false)} />
+        )}
+        {stage === 'app' && !showStretches && (
           <>
-            {activeTab === 'home' && (
-              <HomeScreen displayName={session?.displayName} />
-            )}
+            {activeTab === 'home' && <HomeScreen onOpenStretches={() => setShowStretches(true)} />}
             {activeTab === 'camera' && <CameraScreen />}
             {activeTab === 'profile' && (
               <ProfileScreen
@@ -212,7 +215,7 @@ export default function App() {
         )}
       </View>
 
-      {stage === 'app' && (
+      {stage === 'app' && !showStretches && (
         <View style={styles.tabShell}>
           <View style={styles.tabBar}>
             {tabs.map((tab) => (

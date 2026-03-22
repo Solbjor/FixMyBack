@@ -48,6 +48,11 @@ export default function CameraScreen() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
+  const [alert, setAlert] = useState<{ visible: boolean; message: string; severity: string }>({
+    visible: false,
+    message: '',
+    severity: 'medium',
+  });
   const webViewRef = useRef<WebView>(null);
   const socketRef = useRef<any>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -196,8 +201,29 @@ export default function CameraScreen() {
     };
   }, []);
 
-  const handleAiToggle = async () => {
+  const handleStartCalibration = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    
+    console.log('[Calibration] Starting 15-second baseline collection (100 samples)...');
+    setIsCalibrating(true);
+    setCalibrationCountdown(15);
+    
+    // Emit calibrate-start to the relay, which forwards to AI
+    socketRef.current?.emit('calibrate-start');
+    
+    // Countdown timer
+    calibrationTimerRef.current = setInterval(() => {
+      setCalibrationCountdown((prev) => {
+        const next = prev - 1;
+        if (next <= 0) {
+          if (calibrationTimerRef.current) {
+            clearInterval(calibrationTimerRef.current);
+            calibrationTimerRef.current = null;
+          }
+        }
+        return next;
+      });
+    }, 1000);
 
     if (isAnalyzingRef.current) {
       if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
@@ -212,9 +238,11 @@ export default function CameraScreen() {
         setSessionId(null);
         setPoseStatus('idle');
       }
-      return;
-    }
+      showAlert('Calibration timed out. Check AI bridge connection and camera pose visibility.', 'high');
+    }, 22000);
+  };
 
+  const handleStartSession = async () => {
     try {
       setSessionError(null);
       const session = await api.startSession();
@@ -224,8 +252,51 @@ export default function CameraScreen() {
       syncIsAnalyzing(true);
       timerRef.current = setInterval(() => setElapsedSeconds((c) => c + 1), 1000);
     } catch (error) {
-      setSessionError(error instanceof Error ? error.message : 'Unable to start session.');
+      const message = error instanceof Error ? error.message : 'Unable to start session.';
+      setSessionError(message);
+      showAlert(`Could not start session: ${message}`, 'high');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+    }
+  };
+
+  const handleAiToggle = async () => {
+    if (isAnalyzing) {
+      // Stop session — emit stop signal and wait briefly for AI summary
+      socketRef.current?.emit('session-stop');
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+
+      // Wait up to 2.5s for the AI to emit session-summary before saving
+      const capturedSessionId = sessionId;
+      const capturedElapsed = elapsedSeconds;
+      setIsAnalyzing(false);
+      setSessionId(null);
+
+      setTimeout(async () => {
+        try {
+          if (capturedSessionId) {
+            const summary = sessionSummaryRef.current;
+            const overallScore = summary?.overallScore;
+            const feedbackSummary = overallScore !== undefined
+              ? `Session score: ${overallScore.toFixed(1)}% over ${capturedElapsed}s`
+              : undefined;
+            await api.endSession(capturedSessionId, overallScore, feedbackSummary);
+            console.log('[Session] Ended with score:', overallScore, 'duration:', capturedElapsed);
+          }
+        } catch (error) {
+          setSessionError(error instanceof Error ? error.message : 'Unable to end session.');
+        } finally {
+          sessionSummaryRef.current = null;
+        }
+      }, 2500);
+      return;
+    }
+
+    // Not analyzing -> start calibration
+    if (!isCalibrating) {
+      await handleStartCalibration();
     }
   };
 
@@ -266,16 +337,18 @@ export default function CameraScreen() {
 
         <View style={styles.controls}>
           <Text style={[styles.timerText, isAnalyzing && styles.timerActive]}>
-            {formatElapsed(elapsedSeconds)}
+            {isCalibrating ? `Calibrating: ${calibrationCountdown}s` : formatElapsed(elapsedSeconds)}
           </Text>
 
           <View style={styles.shutterStack}>
             <Pressable
               onPress={handleAiToggle}
+              disabled={isCalibrating}
               style={({ pressed }) => [
                 styles.shutterOuter,
                 isAnalyzing && styles.shutterOuterActive,
-                pressed && styles.shutterPressed,
+                isCalibrating && styles.shutterOuterDisabled,
+                pressed && !isCalibrating && styles.shutterPressed,
               ]}
             >
               <View style={[styles.shutterRing, isAnalyzing && styles.shutterRingActive]}>
@@ -283,7 +356,11 @@ export default function CameraScreen() {
               </View>
             </Pressable>
             <Text style={styles.aiButtonLabel}>
-              {isAnalyzing ? 'Tap to stop' : 'Tap to start'}
+              {isCalibrating
+                ? 'Calibrating...'
+                : isAnalyzing
+                ? 'Tap to stop'
+                : 'Tap to start'}
             </Text>
           </View>
 
@@ -297,6 +374,25 @@ export default function CameraScreen() {
           {sessionError ? <Text style={styles.sessionError}>{sessionError}</Text> : null}
         </View>
       </View>
+
+      {/* Alert Modal */}
+      <Modal
+        visible={alert.visible}
+        transparent
+        animationType="fade"
+      >
+        <View style={styles.alertOverlay}>
+          <View
+            style={[
+              styles.alertBox,
+              alert.severity === 'high' && styles.alertBoxHigh,
+              alert.severity === 'success' && styles.alertBoxSuccess,
+            ]}
+          >
+            <Text style={styles.alertText}>{alert.message}</Text>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -384,7 +480,7 @@ const styles = StyleSheet.create({
     fontSize: fontSize['2xl'],
     fontWeight: '600',
     color: colors.textMuted,
-    fontVariant: ['tabular-nums'],
+    fontVariant: ['tabular-nums'] as any,
     letterSpacing: 1,
   },
   timerActive: { color: colors.textPrimary },

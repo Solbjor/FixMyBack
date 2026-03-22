@@ -8,3 +8,6 @@ frontend/web-build/
 .env.local
 serviceAccountKey.json
 *node_modules*
+.venv*/
+AI-section/.venv*/
+__pycache__/

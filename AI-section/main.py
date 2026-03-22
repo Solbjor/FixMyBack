@@ -389,12 +389,33 @@ def main_stream(socket_url):
                 "calibrating": calibrating,
             })
     
+    # Called by StreamBridge on 'session-stop' before disconnecting
+    def on_session_stop():
+        summary = tracker.get_summary()
+        dur = summary.get("session_duration", "0m 0s")
+        # Parse duration string "Xm Ys" into total seconds
+        duration_seconds = int(tracker.session_duration) if hasattr(tracker, 'session_duration') else 0
+        payload = {
+            "overallScore": round(float(summary.get("overall_score", 0) or 0), 2),
+            "rollingScore": round(float(summary.get("rolling_score", 0) or 0), 2),
+            "durationSeconds": duration_seconds,
+            "totalFrames": int(summary.get("total_frames", 0) or 0),
+            "worstMetric": summary.get("worst_metric") or "",
+            "sessionDuration": dur,
+        }
+        try:
+            bridge.sio.emit("session-summary", payload)
+            logger.info(f"[SESSION] Emitted session-summary: {payload}")
+        except Exception as e:
+            logger.error(f"[SESSION] Failed to emit session-summary: {e}")
+
     # Create bridge
     bridge = StreamBridge(
         socket_url=socket_url,
         run_movenet_fn=run_movenet,
         compute_features_fn=compute_posture_features,
-        post_inference_cb=on_inference
+        post_inference_cb=on_inference,
+        session_stop_cb=on_session_stop,
     )
     
     # Connect
@@ -410,6 +431,7 @@ def main_stream(socket_url):
     logger.info("[CAL] Calibration started. Collecting 30 samples...")
 
     # Run processing loop (blocks until stop_requested is set)
+    # Calibration will be started by frontend via 'calibrate-start' event
     try:
         bridge.process_frames()
     except KeyboardInterrupt:

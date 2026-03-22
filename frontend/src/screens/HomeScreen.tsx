@@ -154,10 +154,10 @@ function ChevronRight() {
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 interface HomeScreenProps {
-  displayName?: string;
+  onOpenStretches?: () => void;
 }
 
-export default function HomeScreen({ displayName }: HomeScreenProps) {
+export default function HomeScreen({ onOpenStretches }: HomeScreenProps) {
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.screen}>
@@ -221,7 +221,7 @@ export default function HomeScreen({ displayName }: HomeScreenProps) {
           </View>
 
           {/* ── CTA pill ── */}
-          <TouchableOpacity style={styles.ctaPill} activeOpacity={0.85}>
+          <TouchableOpacity style={styles.ctaPill} activeOpacity={0.85} onPress={onOpenStretches}>
             <View>
               <Text style={styles.ctaLabel}>Today's stretch</Text>
               <Text style={styles.ctaTitle}>Upper back — 3 exercises</Text>
