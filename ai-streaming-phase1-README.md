@@ -71,7 +71,7 @@ cd AI-section
 pip install python-socketio python-engineio requests
 
 # Mode 1: Stream from relay (IPv4 of your machine)
-python main.py --stream --socket http://192.168.1.192:4000
+python main.py --stream --socket http://localhost:4000
 
 # Mode 2: Local webcam (original; for comparison)
 python main.py  # Requires TensorFlow + OpenCV

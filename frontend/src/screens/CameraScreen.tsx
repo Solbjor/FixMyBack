@@ -62,6 +62,8 @@ export default function CameraScreen() {
   const calibrationTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const calibrationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastAlertRef = useRef<number>(0);
+  // Stores the session summary emitted by the AI bridge on session-stop
+  const sessionSummaryRef = useRef<{ overallScore?: number; durationSeconds?: number } | null>(null);
   const screenWidth = Dimensions.get('window').width;
 
   const formatElapsed = (totalSeconds: number) => {
@@ -143,6 +145,15 @@ export default function CameraScreen() {
       console.log('[Alert]', data.message, `[${data.severity}]`);
       showAlert(data.message, data.severity);
     });
+
+    // Receive AI session summary (score, duration) on session-stop
+    socketRef.current.on('session-summary', (data: any) => {
+      console.log('[Session Summary]', JSON.stringify(data));
+      sessionSummaryRef.current = {
+        overallScore: typeof data.overallScore === 'number' ? data.overallScore : undefined,
+        durationSeconds: typeof data.durationSeconds === 'number' ? data.durationSeconds : undefined,
+      };
+    });
     
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -205,20 +216,36 @@ export default function CameraScreen() {
 
   const handleAiToggle = async () => {
     if (isAnalyzing) {
-      // Stop session
+      // Stop session — emit stop signal and wait briefly for AI summary
       socketRef.current?.emit('session-stop');
       if (timerRef.current) {
         clearInterval(timerRef.current);
         timerRef.current = null;
       }
-      try {
-        if (sessionId) await api.endSession(sessionId);
-      } catch (error) {
-        setSessionError(error instanceof Error ? error.message : 'Unable to end session.');
-      } finally {
-        setIsAnalyzing(false);
-        setSessionId(null);
-      }
+
+      // Wait up to 2.5s for the AI to emit session-summary before saving
+      const capturedSessionId = sessionId;
+      const capturedElapsed = elapsedSeconds;
+      setIsAnalyzing(false);
+      setSessionId(null);
+
+      setTimeout(async () => {
+        try {
+          if (capturedSessionId) {
+            const summary = sessionSummaryRef.current;
+            const overallScore = summary?.overallScore;
+            const feedbackSummary = overallScore !== undefined
+              ? `Session score: ${overallScore.toFixed(1)}% over ${capturedElapsed}s`
+              : undefined;
+            await api.endSession(capturedSessionId, overallScore, feedbackSummary);
+            console.log('[Session] Ended with score:', overallScore, 'duration:', capturedElapsed);
+          }
+        } catch (error) {
+          setSessionError(error instanceof Error ? error.message : 'Unable to end session.');
+        } finally {
+          sessionSummaryRef.current = null;
+        }
+      }, 2500);
       return;
     }
 

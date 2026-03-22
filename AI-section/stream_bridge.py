@@ -32,18 +32,20 @@ class StreamBridge:
     Ingests live frames over Socket.IO, runs inference, handles backpressure.
     """
     
-    def __init__(self, socket_url, run_movenet_fn, compute_features_fn, post_inference_cb=None):
+    def __init__(self, socket_url, run_movenet_fn, compute_features_fn, post_inference_cb=None, session_stop_cb=None):
         """
         Args:
             socket_url: e.g., 'http://192.168.1.192:4000'
             run_movenet_fn: function to run inference on BGR frame
             compute_features_fn: function to extract posture features from keypoints
             post_inference_cb: optional callback(frame, keypoints, features) after inference
+            session_stop_cb: optional callback() called on 'session-stop' before disconnecting
         """
         self.socket_url = socket_url
         self.run_movenet = run_movenet_fn
         self.compute_features = compute_features_fn
         self.post_inference_cb = post_inference_cb or (lambda *args: None)
+        self.session_stop_cb = session_stop_cb
         
         self.sio = Client()
         self.connected = Event()
@@ -120,6 +122,12 @@ class StreamBridge:
         def on_session_stop():
             """Stop monitoring when session ends."""
             logger.info("🛑 [SESSION] Stop signal received. Shutting down...")
+            # Invoke callback (emits session-summary) before disconnecting
+            if self.session_stop_cb:
+                try:
+                    self.session_stop_cb()
+                except Exception as e:
+                    logger.error(f"session_stop_cb error: {e}")
             self.stop()
     
     def connect(self):

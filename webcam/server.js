@@ -150,15 +150,26 @@ io.on('connection', (socket) => {
     socket.broadcast.emit('calibration-failed', data);
   });
 
-  // Session stop → kill AI bridge
+  // Session stop → let AI emit summary, then kill
   socket.on('session-stop', () => {
     console.log('[SESSION] Stop signal received');
     socket.broadcast.emit('session-stop');
     if (aiProcess && !aiProcess.killed) {
-      console.log('[AI] Killing stream bridge process...');
-      aiProcess.kill();
-      aiProcess = null;
+      // Give the AI bridge 3 seconds to emit session-summary before killing
+      setTimeout(() => {
+        if (aiProcess && !aiProcess.killed) {
+          console.log('[AI] Killing stream bridge process...');
+          aiProcess.kill();
+          aiProcess = null;
+        }
+      }, 3000);
     }
+  });
+
+  // AI → App: session summary (score, duration, stats)
+  socket.on('session-summary', (data) => {
+    console.log('[SESSION SUMMARY]', JSON.stringify(data));
+    socket.broadcast.emit('session-summary', data);
   });
 
   // Legacy events
