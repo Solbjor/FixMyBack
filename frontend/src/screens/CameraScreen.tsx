@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { WebView } from 'react-native-webview';
 import { api } from '../api';
-import { SERVER_URL } from '../config';
+import { STREAM_URL } from '../config';
 import { colors, fontSize, radius, brand } from '../../constants/theme';
 
 const feedHtml = `
@@ -62,7 +62,7 @@ export default function CameraScreen() {
   };
 
   useEffect(() => {
-    socketRef.current = io(SERVER_URL);
+    socketRef.current = io(STREAM_URL);
     socketRef.current.on('connect',    () => setConnected(true));
     socketRef.current.on('disconnect', () => setConnected(false));
     socketRef.current.on('frame', (data: string) => {

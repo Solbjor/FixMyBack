@@ -1,7 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { SERVER_URL } from './config';
-
-const BACKEND_URL = SERVER_URL;
+import { BACKEND_URL } from './config';
 
 async function getToken(): Promise<string | null>{
     return await AsyncStorage.getItem('idToken');
