@@ -46,6 +46,7 @@ const feedHtml = `
 export default function CameraScreen() {
   const [connected, setConnected] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [poseStatus, setPoseStatus] = useState('idle');
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
@@ -61,6 +62,23 @@ export default function CameraScreen() {
     return `${h}:${m}:${s}`;
   };
 
+  const getStatusLabel = (status: string) => {
+    if (status === 'good') return 'GOOD';
+    if (status === 'caution') return 'CAUTION';
+    if (status === 'bad') return 'BAD';
+    if (status === 'no_pose') return 'NO POSE';
+    if (status === 'calibrating') return 'CALIBRATING';
+    return 'WAITING';
+  };
+
+  const getStatusColors = (status: string) => {
+    if (status === 'good') return { bg: '#dcfce7', fg: '#166534' };
+    if (status === 'caution') return { bg: '#fef3c7', fg: '#92400e' };
+    if (status === 'bad') return { bg: '#fee2e2', fg: '#991b1b' };
+    if (status === 'calibrating') return { bg: '#dbeafe', fg: '#1d4ed8' };
+    return { bg: '#e5e7eb', fg: '#374151' };
+  };
+
   useEffect(() => {
     socketRef.current = io(STREAM_URL);
     socketRef.current.on('connect',    () => setConnected(true));
@@ -68,6 +86,13 @@ export default function CameraScreen() {
     socketRef.current.on('frame', (data: string) => {
       const escapedData = data.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
       webViewRef.current?.injectJavaScript(`window.setFrame('${escapedData}'); true;`);
+    });
+    socketRef.current.on('posture-update', (payload: any) => {
+      if (payload?.calibrating) {
+        setPoseStatus('calibrating');
+      } else if (payload?.status) {
+        setPoseStatus(payload.status);
+      }
     });
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -147,6 +172,24 @@ export default function CameraScreen() {
               onMessage={(e) => console.log('[WebView]', e.nativeEvent.data)}
               onError={(e) => console.log('[WebView Error]', e)}
             />
+          </View>
+
+          <View
+            style={[
+              styles.statusBadge,
+              {
+                backgroundColor: getStatusColors(poseStatus).bg,
+              },
+            ]}
+          >
+            <Text
+              style={[
+                styles.statusBadgeText,
+                { color: getStatusColors(poseStatus).fg },
+              ]}
+            >
+              {getStatusLabel(poseStatus)}
+            </Text>
           </View>
         </View>
 
@@ -266,6 +309,18 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
     overflow: 'hidden',
     backgroundColor: '#1a1a1a',
+  },
+  statusBadge: {
+    alignSelf: 'center',
+    marginTop: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: radius.full,
+  },
+  statusBadgeText: {
+    fontSize: fontSize.xs,
+    fontWeight: '700',
+    letterSpacing: 0.6,
   },
 
   // ── Controls ──
