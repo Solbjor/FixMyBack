@@ -202,7 +202,12 @@ export default function App() {
         )}
         {stage === 'app' && !showStretches && (
           <>
-            {activeTab === 'home' && <HomeScreen onOpenStretches={() => setShowStretches(true)} />}
+            {activeTab === 'home' && (
+              <HomeScreen
+                onOpenStretches={() => setShowStretches(true)}
+                displayName={session?.displayName}
+              />
+            )}
             {activeTab === 'camera' && <CameraScreen />}
             {activeTab === 'profile' && (
               <ProfileScreen
