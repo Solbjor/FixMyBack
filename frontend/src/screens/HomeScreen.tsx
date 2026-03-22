@@ -242,11 +242,9 @@ export default function HomeScreen({ displayName }: HomeScreenProps) {
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: colors.bgPage,
   },
   screen: {
     flex: 1,
-    backgroundColor: colors.bgPage,
   },
   orbLayer: {
     ...StyleSheet.absoluteFillObject,
